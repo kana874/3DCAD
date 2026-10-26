@@ -7,27 +7,35 @@
   document.documentElement.lang = 'ja';
   document.title = 'FreeCAD 日本語版 | ブラウザ3D CAD';
 
-  // Qt/WASM 1.0.8: adding a CJK font can trigger a WebAssembly indirect-call
-  // signature mismatch in QFontEngineFT on some browsers. Keep the boot path
-  // safe until a proper font-engine fix is validated.
-  // Opt in explicitly: ?experimentalFont=1 (diagnostic only).
-  if (new URLSearchParams(location.search).get('experimentalFont') !== '1') {
-    console.info('[freecad-web-ja] Experimental CJK font injection is disabled; use ?experimentalFont=1 for diagnostics');
+  // Only use CJK registration on explicit diagnostic requests. A prior
+  // variable-font attempt reached QFontEngineFT::init and trapped with a
+  // WebAssembly function signature mismatch on Edge 155. Unmodified URL is
+  // deliberately stable while static fonts are validated.
+  const query = new URLSearchParams(location.search);
+  const requestedMode = query.get('fontMode');
+  const mode = ['static', 'static-register'].includes(requestedMode)
+    ? requestedMode
+    : (query.get('experimentalFont') === '1' ? 'variable' : 'off');
+  if (mode === 'off') {
+    console.info('[freecad-web-ja] CJK font registration disabled (safe mode)');
     return;
   }
-
+  const fontPath = mode.startsWith('static')
+    ? '/usr/share/fonts/NotoSansJP-Static.ttf'
+    : '/usr/share/fonts/NotoSansJP-VF.ttf';
+  const applyFont = mode !== 'static-register';
 
   const python = [
     "import sys",
     "try:",
     " import FreeCAD as _jp_app",
     " from PySide6 import QtGui as _jp_gui, QtWidgets as _jp_widgets",
-    " _jp_path='/usr/share/fonts/NotoSansJP-VF.ttf'",
-    " _jp_font_id=_jp_gui.QFontDatabase.addApplicationFont(_jp_path)",
+    " _jp_path=" + JSON.stringify(fontPath),
+    " _jp_font_id=_jp_gui.QFontDatabase.addApplicationFontFromData(open(_jp_path,'rb').read())",
     " if _jp_font_id < 0: raise RuntimeError('Noto Sans JP font registration failed')",
     " _jp_family=_jp_gui.QFontDatabase.applicationFontFamilies(_jp_font_id)[0]",
     " _jp_qapp=_jp_widgets.QApplication.instance()",
-    " if _jp_qapp is not None:",
+    " if _jp_qapp is not None and " + (applyFont ? 'True' : 'False') + ":",
     "  _jp_font=_jp_gui.QFont(_jp_family)",
     "  _jp_font.setPointSize(9)",
     "  _jp_qapp.setFont(_jp_font)",
@@ -65,7 +73,7 @@
       } catch (_) {}
       if (state.startsWith('ok:')) {
         clearInterval(poll);
-        console.info('[freecad-web-ja] Japanese font active', state);
+        console.info('[freecad-web-ja] font mode=' + mode, state);
       } else if (Date.now() - started > 10000) {
         clearInterval(poll);
         console.warn('[freecad-web-ja] Check the console and the font asset:', state);
