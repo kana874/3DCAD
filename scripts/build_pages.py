@@ -105,7 +105,7 @@ def site(site_dir, base, version):
     # That prevents a 404 for FreeCAD.wasm (we only publish FreeCAD.wasm.gz).
     html = replace_one(
         html, "const instance = window.fcInstance = await qtLoad(__cfg);",
-        "__cfg.qt.module = WebAssembly.compile(__fcWasmBytes);\\n"
+        "__cfg.qt.module = WebAssembly.compile(__fcWasmBytes);\n"
         "     const instance = window.fcInstance = await qtLoad(__cfg);",
         "Qt precompiled module injection")
 
