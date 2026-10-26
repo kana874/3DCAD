@@ -71,6 +71,9 @@ def current_state(app, gui):
         selected = 0
     available = {action: bool(command_name(gui, action))
                  for action in COMMANDS}
+    # Gui.activeDocument().resetEdit() is the supported fallback when the
+    # dedicated Sketcher_LeaveSketch command is not registered in this build.
+    available["leave_sketch"] = bool(in_edit)
     return {
         "document": bool(document),
         "sketchEdit": in_edit,
