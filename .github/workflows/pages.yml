@@ -13,6 +13,7 @@ on:
       - scripts/localize_freecad.py
       - pages/**
       - tests/test_pages.py
+      - tests/test_pages_sw.mjs
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -33,6 +34,8 @@ jobs:
         uses: actions/checkout@v4
       - name: Check Pages conversion logic
         run: python3 -m unittest discover -s tests -p 'test_pages.py' -v
+      - name: Verify Service Worker fallback with a real gzip WASM stream
+        run: node tests/test_pages_sw.mjs
       - name: Build Japanese FreeCAD image
         run: docker build --progress=plain -f Dockerfile.ja -t freecad-web-ja:pages .
       - name: Extract static distribution
@@ -50,6 +53,8 @@ jobs:
         run: |
           set -euo pipefail
           test -s _site/index.html
+          test -s _site/sw.js
+          grep -q 'FreeCAD.wasm.gz' _site/sw.js
           test -s _site/FreeCAD.js
           test -s _site/FreeCAD.wasm.gz
           test -s _site/FreeCAD.data.gz
