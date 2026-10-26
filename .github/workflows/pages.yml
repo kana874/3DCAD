@@ -45,6 +45,10 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_fusion_design.py' -v
       - name: Verify Service Worker fallback with a real gzip WASM stream
         run: node tests/test_pages_sw.mjs
+      - name: Check Fusion modeling palette JavaScript syntax
+        run: |
+          node --check play-gui/fusion/design-palette.js
+          python3 -m py_compile play-gui/fusion/design-commands.py
       - name: Build Japanese FreeCAD image
         run: docker build --progress=plain -f Dockerfile.ja -t freecad-web-ja:pages .
       - name: Extract static distribution
