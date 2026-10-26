@@ -20,6 +20,7 @@ class JapaneseLocalizationTests(unittest.TestCase):
         self.assertIn('html lang="ja"', result)
         self.assertIn('preload: ["/ja/fonts.json"]', result)
         self.assertIn('/ja/freecad-ja.js', result)
+        self.assertIn('/fusion/fusion-mode.js', result)
 
     def test_upstream_change_fails_loudly(self):
         with self.assertRaises(ValueError):
