@@ -104,6 +104,34 @@ class FusionDesignTests(unittest.TestCase):
         self.assertEqual(f.document.transactions[-1][0],'commit')
         self.assertFalse(f.run('length',-3)['ok'])
         self.assertEqual(selected.Length,12.5)
+    def test_parametric_pad_exact_creates_feature_in_same_body(self):
+        f=Fake()
+        sketch=types.SimpleNamespace(TypeId='Sketcher::SketchObject')
+        f.body.Group=[sketch]
+        shape=types.SimpleNamespace(isNull=lambda:False,isValid=lambda:True,Solids=[object()])
+        made=[]
+        def create(typeid,label):
+            feat=types.SimpleNamespace(Shape=shape,Profile=None,Length=0)
+            made.append((typeid,feat))
+            return feat
+        f.body.newObject=create
+        f.selected=[types.SimpleNamespace(Object=sketch,SubElementNames=[])]
+        response=f.run('pad_exact',18.25)
+        self.assertTrue(response['ok'],response)
+        self.assertEqual(made[0][0],'PartDesign::Pad')
+        self.assertIs(made[0][1].Profile,sketch)
+        self.assertEqual(made[0][1].Length,18.25)
+        self.assertEqual(f.document.transactions[-1][0],'commit')
+    def test_failed_numeric_extrusion_rolls_back(self):
+        f=Fake()
+        sketch=types.SimpleNamespace(TypeId='Sketcher::SketchObject')
+        f.body.Group=[sketch]
+        bad_shape=types.SimpleNamespace(isNull=lambda:True,isValid=lambda:False,Solids=[])
+        f.body.newObject=lambda typeid,label:types.SimpleNamespace(Shape=bad_shape,Profile=None,Length=0)
+        f.selected=[types.SimpleNamespace(Object=sketch,SubElementNames=[])]
+        res=f.run('pad_exact',12)
+        self.assertFalse(res['ok'])
+        self.assertEqual(f.document.transactions[-1][0],'abort')
     def test_rejects_unknown_code(self):
         f=Fake()
         self.assertFalse(f.run("__import__('os')")['ok'])
@@ -114,6 +142,8 @@ class FusionDesignTests(unittest.TestCase):
         self.assertIn('fusion_gui',js)
         self.assertIn("get('fusionUI')==='classic'",js)
         self.assertIn('fd-dimensions',js)
+        self.assertIn("['pad_exact','押し出し（mm）'",js)
+        self.assertIn('pocket_exact',js)
         self.assertIn("send(state?.sketchEdit?'sketch_dimension':'length')",js)
         self.assertIn('fusion-integrated #screen',css)
         self.assertNotIn('dispatchEvent(new MouseEvent(',js)

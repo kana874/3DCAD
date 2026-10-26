@@ -18,6 +18,8 @@
     ['construction','補助線','sketch','X：作図線切替','⋯'],
     ['leave_sketch','スケッチ終了','sketch','スケッチを閉じて3Dに戻る','✓'],
     ['pad','押し出し','solid','E：スケッチを選択してパッド','▰'],
+    ['pad_exact','押し出し（mm）','solid','選択スケッチを入力距離で押し出し','▱'],
+    ['pocket_exact','切り取り（mm）','solid','選択スケッチを入力距離で切り取り','⊟'],
     ['pocket','切り取り','solid','スケッチを選択してポケット','⊟'],
     ['revolve','回転','solid','断面を軸回転','◴'],
     ['hole','穴','solid','H：面またはスケッチを選択','⊙'],
@@ -90,7 +92,15 @@
   }
   // Body and selected-face ownership are resolved by the native Python broker,
   // so there is never an extra Body added to an existing Pad by the browser UI.
-  function begin(action){send(action);}
+  function begin(action){
+    if(action==='pad_exact'||action==='pocket_exact'){
+      const value=Number(lengthField?.value);
+      if(!Number.isFinite(value)||value<0.01||value>100000){
+        inform('0.01〜100000 mmの距離を指定してください。',true);return;
+      }
+    }
+    send(action);
+  }
   function send(action,done){
 
     if(pending||!allow.has(action)||!source||!canRun()){
@@ -105,7 +115,7 @@
       try{fs.unlink(out);}catch(_){}
       const py=source.replace('"__FUSION_DESIGN_REQUEST__"',JSON.stringify(action))
         .replace('__FUSION_DESIGN_ID__',String(id))
-        .replace('__FUSION_DESIGN_VALUE__',String(action==='length'||action==='sketch_dimension'?Number(lengthField?.value):0));
+        .replace('__FUSION_DESIGN_VALUE__',String(['length','sketch_dimension','pad_exact','pocket_exact'].includes(action)?Number(lengthField?.value):0));
       if(py===source||py.includes('__FUSION_DESIGN_ID__')||py.includes('__FUSION_DESIGN_VALUE__')||
         py.includes('"__FUSION_DESIGN_REQUEST__"'))throw Error('コマンドテンプレートが一致しません');
       window.__fcRunPyGuarded(py);
