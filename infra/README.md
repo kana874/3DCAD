@@ -1,0 +1,83 @@
+<!-- SPDX-License-Identifier: LGPL-2.1-or-later -->
+# freecad-web deploy (freecad.virtastic.app)
+
+The live site is deployed by a **self-hosted GitHub Actions runner that runs ON the origin VPS**,
+triggered by a push to the **`ovhcloud`** branch. The runner builds the images locally and
+wires them into a shared `edge-caddy` reverse proxy.
+
+Production is **two services**, not one:
+
+- `freecad` — the nginx container that serves the front end and the engine artifacts. It sets
+  its own COOP/COEP headers (mandatory for the Qt multi-thread wasm; without SharedArrayBuffer
+  it will not boot), and it is the only one the edge talks to.
+- `session` — the shared-session and MCP service (`infra/session/`), reached only through the
+  `freecad` container's `/share/` and `/mcp/` proxy locations. Its data lives on a **named
+  volume**, because the container is recreated on every deploy and sessions must outlive that.
+  It is optional: with it stopped the site serves normally and Edit > Share Session says so.
+
+FreeCAD itself is **not** compiled on the box. The prebuilt artifacts ride in a **GitHub
+Release**; the deploy workflow pulls them into the build context before `docker build`.
+
+The *dependency* builds are a different matter and do now run here. `build-deps.yml`,
+`build-ccx.yml` and `build-qt-wasm.yml` all default to `runner: vps` as of 2026-08-18, because
+hosted minutes turned out to be the binding constraint (1823 of a 2000-minute monthly allowance
+spent in eighteen days) while the box idled at load 0.2. The box was provisioned with
+`build-essential cmake ninja-build` at the same time. Each of those workflows keeps
+`ubuntu-latest` in its dropdown: the Virtastic runner takes one job at a time, so a long build
+queues every other Virtastic deploy behind it.
+
+The origin address is deliberately not recorded in this repo — Cloudflare proxies the hostname so
+the origin stays private. CI reads it from the `ORIGIN_IP` repository variable, and Terraform from
+`TF_VAR_origin_ip`.
+
+## Files
+| File | Role |
+|---|---|
+| `.github/workflows/deploy-ovh.yml` | the deploy — self-hosted-runner build + health-check (push to `ovhcloud`) |
+| `.github/workflows/dns.yml` | stateless Cloudflare A-record upsert |
+| `docker-compose.prod.yml` | the prod services on the external `nostalgia` network, no host ports |
+| `deploy/freecad.caddy` | edge vhost drop-in: TLS origin cert + `import sec_headers` + `reverse_proxy freecad:80` |
+| `infra/Dockerfile` | `nginx:1.27-alpine` + front-end (git) + artifacts (from Release) |
+| `infra/nginx.conf` | serves COOP/COEP on every response; landing page; hard-caches `.wasm/.data/.js`; proxies `/share/` and `/mcp/` to `session:8000` |
+| `infra/session/share.py` | the session protocol core — stdlib only, transport-agnostic. `--selftest` asserts the whole protocol without sockets; `--list`, `--files` and `--stats` inspect the live store |
+| `infra/session/app.py` | the session process: Starlette serving `share.handle()` in a thread, with the MCP server (FastMCP, Streamable HTTP, stateless) mounted over it |
+| `infra/session/Dockerfile` | the `session` image: `python:3.12-alpine` + those two files. Runs `share.py --selftest` as a build layer, so a broken protocol cannot produce an image |
+
+## Cut a deploy
+```bash
+# 1. Build locally -> play-gui/FreeCAD.{js,wasm,data}   (see BUILD-WEH.md for the full lane)
+#    Normally CI (link-freecad.yml); for a manual lane follow BUILD-WEH.md.
+
+# 2. Publish the artifacts as a Release BEFORE pushing — CI pulls them by tag.
+#    ALL SEVEN, always: CI hard-fails on a missing asset, and gmsh/ccx are separate wasm
+#    modules that a FreeCAD-only relink does not rebuild -- re-upload them unchanged.
+gh release create build-$(date +%Y%m%d) \
+    play-gui/FreeCAD.js play-gui/FreeCAD.wasm play-gui/FreeCAD.data \
+    play-gui/gmsh.js play-gui/gmsh.wasm play-gui/ccx.js play-gui/ccx.wasm \
+    --title "build $(date +%Y-%m-%d)" --notes "engine build"
+
+# 3. Ship it: push the ovhcloud branch -> the runner deploys + health-checks
+git push origin main:ovhcloud
+#    (or Actions -> "deploy-ovh (freecad.virtastic.app)" -> Run workflow)
+```
+
+## Box prerequisites (already satisfied)
+Self-hosted runner (`self-hosted, ovh, virtastic`), the `edge-caddy` container importing its
+vhost drop-ins, the external `nostalgia` network, and the origin TLS cert. Cloudflare DNS for
+`freecad.virtastic.app` → the box (proxied, Full strict). The workflow drops in the vhost +
+compose and restarts the edge.
+
+## Verify
+```bash
+curl -sI https://freecad.virtastic.app/ | grep -i cross-origin
+# COOP=same-origin AND COEP=require-corp, else the app boots to a blank page.
+
+curl -s https://freecad.virtastic.app/share/health
+# ok. A 502 here means the session container is not running: nginx proxies /share/ to
+# session:8000 and has nothing to reach. Sharing and MCP are dead, the rest of the site is fine.
+
+curl -s https://freecad.virtastic.app/files
+# 404 "files_off" is the normal answer: server files are OFF unless the session container
+# has FCWEB_FILES=1. That is the same answer as an absent container, so nothing in the UI
+# depends on the operator having enabled it.
+```

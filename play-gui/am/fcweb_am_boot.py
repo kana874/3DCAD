@@ -1,0 +1,580 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
+"""Boot hook for the FreeCAD-Web Addon Manager overlay.
+
+Imported once at startup, after /fcweb-am is on sys.path. Holds the patches that cannot be
+delivered by shadowing a module -- because a class object is shared, so replacing a method
+on it is visible to every module that already imported that class, which shadowing is not.
+
+Nothing here imports the Addon Manager's own modules eagerly. They are not on sys.path
+until the workbench is activated, and importing them at boot would both slow startup and
+drag Qt network machinery in before the GUI exists. install() only registers a hook.
+"""
+
+import os
+import sys
+
+_installed = False
+
+
+def _patch_blocking_dialogs():
+    """Make the Addon Manager's modal helpers non-blocking.
+
+    MEASURED 2026-09-03: a QMessageBox opened from a Qt timer callback crashes the tab. Two
+    runs of the same probe against the same container differed only in whether that modal
+    was opened -- without it, 208 console lines and a clean exit; with it, "Page crashed".
+
+    The mechanism: the shipped dialog shim (wasm_dialog_shim_jspi.py) routes
+    QMessageBox.exec() through _fcwebdlg.confirm, which SUSPENDS the wasm stack via JSPI.
+    Only exports named in ASYNCIFY_EXPORTS (fcweb_run_python, fcweb_dispatch_event) may
+    suspend; a Qt timer or network callback is neither, so the suspend is fatal.
+
+    Every completion in this overlay lands in a slot that may want to tell the user
+    something -- the connection check failing, an install finishing. Those all funnel
+    through MessageDialog.show_modal, which is a nested exec(). Replaced with show().
+
+    Widgets/ is a package-relative import so it cannot be shadowed; the class is patched
+    instead, which reaches every importer regardless of when they imported it.
+    """
+    from addonmanager_fcweb_async import notify
+
+    try:
+        from Widgets.addonmanager_utility_dialogs import MessageDialog
+    except Exception as e:  # not importable until the workbench is active
+        return "MessageDialog unavailable (%r)" % (e,)
+
+    try:
+        from PySideWrapper import QtWidgets
+    except ImportError:
+        from PySide6 import QtWidgets
+
+    # Dialogs whose answer decides whether an installation continues. There is no way to
+    # ask the user from a callback here -- the modal that would ask is the thing that
+    # crashes -- so these answer Yes, which is what the text offers ("Continue with addon
+    # installation anyway?") and the only answer that leaves the addon installed. Both are
+    # reached because pip cannot exist in this build, not because anything went wrong.
+    #
+    # Keyed on object_name, which upstream marks DO NOT TRANSLATE precisely so it can be
+    # matched. Everything else gets the neutral answer, so a question this list does not
+    # know about can never be auto-confirmed into a destructive action.
+    CONTINUE_ANYWAY = {
+        "AddonManager_CannotExecutePipDialog",
+        "AddonManager_PackageInstallationFailedDialog",
+    }
+
+    def _show_modal(dialog_type, object_name, title, message, *args, **kwargs):
+        notify(title or "Addon Manager", message or "")
+        if object_name in CONTINUE_ANYWAY:
+            return QtWidgets.QMessageBox.Yes
+        return QtWidgets.QMessageBox.Ok
+
+    MessageDialog.show_modal = staticmethod(_show_modal)
+    return "MessageDialog.show_modal -> non-blocking"
+
+
+# Startup-phase tracing. The sequence advances on a signal, so when a phase aborts the
+# engine there is no traceback -- only the last phase entered tells you where it died.
+TRACE = False
+
+
+def _trace_startup():
+    """Print each startup phase as it is entered, with the catalogue size so far."""
+    import AddonManager
+    cls = AddonManager.CommandAddonManager
+    orig = cls.do_next_startup_phase
+
+    def traced(self):
+        AddonManager._fcweb_cmd = self
+        try:
+            nxt = self.startup_sequence[0].__name__ if self.startup_sequence else "<done>"
+        except Exception:
+            nxt = "?"
+        try:
+            rows = self.item_model.rowCount()
+        except Exception:
+            rows = -1
+        print("[fcweb] am phase=%s rows=%d" % (nxt, rows))
+        sys.stdout.flush()
+        return orig(self)
+
+    cls.do_next_startup_phase = traced
+    return "startup phase tracing on"
+
+OVERLAY_DIR = "/fcweb-am"
+
+# Load order matters: each shadow imports the ones above it by bare name.
+SHADOWS = (
+    "addonmanager_fcweb_async",
+    "addonmanager_workers_utility",
+    "addonmanager_workers_startup",
+)
+
+# Names already bound into other modules by `from <shadow> import <name>`. sys.path cannot
+# reach these -- the binding happened at import time and points at the class object.
+REBIND = {
+    "AddonManager": (
+        "CreateAddonListWorker",
+        "CheckWorkbenchesForUpdatesWorker",
+        "GetBasicAddonStatsWorker",
+        "GetAddonScoreWorker",
+        "CheckForMissingDependenciesWorker",
+    ),
+    "addonmanager_package_details_controller": ("CheckSingleUpdateWorker",),
+    "addonmanager_connection_checker": ("ConnectionChecker",),
+}
+
+
+def _install_shadows():
+    """Replace the shipped worker modules, whatever sys.path says.
+
+    MEASURED 2026-09-03: putting /fcweb-am at sys.path[0] was NOT enough. FreeCAD puts the
+    Mod/AddonManager directory ahead of it when the workbench loads, so every import
+    resolved to the shipped QThread workers and this entire overlay sat unused while the
+    engine kept aborting in PyGILState_Release. The trace that proved it:
+
+        am startup_mod=/freecad/Mod/AddonManager/./addonmanager_workers_startup.py
+        am worker_base=QThread
+
+    So load by explicit file path instead, and cover both import orderings:
+      * sys.modules[name] = ours  -> any import that has NOT happened yet gets ours;
+      * REBIND                    -> any `from X import Y` that ALREADY happened is repointed.
+    """
+    import importlib.util
+    import os
+
+    loaded = {}
+    for name in SHADOWS:
+        path = os.path.join(OVERLAY_DIR, name + ".py")
+        if not os.path.isfile(path):
+            raise RuntimeError("overlay module missing: %s" % path)
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        # Registered BEFORE exec so the next shadow's bare-name import resolves to this one.
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        loaded[name] = mod
+
+    rebound = 0
+    missing = []
+    for target, names in REBIND.items():
+        mod = sys.modules.get(target)
+        if mod is None:
+            continue          # not imported yet; the sys.modules entry above covers it
+        for n in names:
+            for sh in loaded.values():
+                if hasattr(sh, n):
+                    setattr(mod, n, getattr(sh, n))
+                    rebound += 1
+                    break
+            else:
+                missing.append("%s.%s" % (target, n))
+
+    note = "shadows loaded (%d), rebound %d name(s)" % (len(loaded), rebound)
+    if missing:
+        note += "; NOT FOUND: " + ", ".join(missing)
+    return note
+
+
+def _patch_connection_checker():
+    """Rebuild the connection checker the registered command already owns.
+
+    The Std_AddonMgr command object is constructed when FreeCAD registers the command, long
+    before this overlay loads, and its ConnectionCheckerGUI holds a ConnectionChecker built
+    from the SHIPPED module -- a QThread. Rebinding the class reaches every later instance
+    but cannot reach one that already exists, so starting it ran Python on a worker thread
+    and CPython aborted in PyGILState_Release about 0.7 s later.
+
+    MEASURED 2026-09-04, the three runs that pinned it:
+      * Gui.runCommand('Std_AddonMgr')          -> abort 0.7 s later
+      * Gui.runCommand('Std_ViewFitAll')        -> no abort (not command dispatch itself)
+      * Activated()'s steps called directly on a FRESHLY built command, which picks up the
+        shadow                                  -> no abort
+    """
+    import addonmanager_connection_checker as ccm
+
+    orig_start = ccm.ConnectionCheckerGUI.start
+
+    def start(self):
+        # ccm.ConnectionChecker is the rebound (AsyncWorker) class by the time this runs.
+        self.connection_checker = ccm.ConnectionChecker()
+        self.signals_connected = False
+        orig_start(self)
+
+    ccm.ConnectionCheckerGUI.start = start
+    return "ConnectionCheckerGUI rebuilds its checker from the shadow"
+
+
+def _patch_modal_launch():
+    """Stop the Addon Manager window from opening modally.
+
+    launch() ends with self.dialog.exec(). On this build QDialog::exec() suspends through
+    JSPI, and only stacks entered via fcweb_run_python may suspend. launch() is reached
+    from the connection checker's success signal -- a network callback -- so that exec()
+    suspends on a stack that is not allowed to, and the engine dies.
+
+    exec() is not load-bearing here: launch() ignores its return value and every control in
+    the dialog is already wired through signals (rejected/accepted are connected a few
+    lines above it). So the dialog is shown non-modally instead.
+
+    Done by patching loadUi rather than launch(), because the dialog object is created
+    inside launch() and this is the only seam that sees it without forking 60 lines.
+    """
+    import os
+    import addonmanager_freecad_interface as fci
+
+    orig_load_ui = fci.loadUi
+
+    def load_ui(path, *args, **kwargs):
+        # fci binds loadUi ONCE, at its import: FreeCADGui.PySideUic.loadUi if PySideUic
+        # exists then, else None. This overlay imports fci at boot, before FreeCADGuiInit
+        # has installed PySideUic, so the captured original was None -- and the first-run
+        # consent dialog (first_run.ui, shown on a fresh profile) died with
+        # "'NoneType' object is not callable", after which the half-built dialog window's
+        # pointer handlers hit a freed QWindow (user report 2026-09-15). The gate never saw
+        # it: it sets readWarning2022 to skip that dialog. Resolve late, the way the desktop
+        # effectively does by importing the Addon Manager only when it is opened.
+        nonlocal orig_load_ui
+        if orig_load_ui is None:
+            import FreeCADGui
+            uic = getattr(FreeCADGui, "PySideUic", None)
+            orig_load_ui = getattr(uic, "loadUi", None)
+            if orig_load_ui is None:
+                raise RuntimeError("FreeCADGui.PySideUic.loadUi is not available yet")
+        widget = orig_load_ui(path, *args, **kwargs)
+        try:
+            if os.path.basename(str(path)) == "AddonManager.ui":
+                widget.exec = widget.show
+        except Exception:
+            pass
+        return widget
+
+    fci.loadUi = load_ui
+    return "AddonManager.ui opens non-modally (exec would suspend illegally)"
+
+
+def _stash_command():
+    """Record the live command object as AddonManager._fcweb_cmd.
+
+    The registered Std_AddonMgr instance is otherwise unreachable from Python -- FreeCAD
+    keeps it in the C++ command registry -- and both the boot gate and any support probe
+    need a handle on the running Addon Manager to inspect its model or its workers.
+    """
+    import AddonManager
+
+    cls = AddonManager.CommandAddonManager
+    orig_launch = cls.launch
+
+    def launch(self):
+        AddonManager._fcweb_cmd = self
+        return orig_launch(self)
+
+    cls.launch = launch
+    return "command object exposed as AddonManager._fcweb_cmd"
+
+
+def _fix_proxy_host_map():
+    """Point www.freecad.org at its own proxy key.
+
+    The shipped map sends both freecad.org and www.freecad.org to the "docs" key, and
+    that key resolves to the NON-www host. Anything asking for www therefore lands on
+    freecad.org, which 301s to www, which maps back to "docs" -- a loop. nginx now has a
+    separate "docswww" key; this keeps the Python side consistent with it.
+    """
+    import NetworkManager as nm
+
+    hosts = getattr(nm, "FCWEB_PROXY_HOSTS", None)
+    if not isinstance(hosts, dict):
+        return "proxy host map unavailable"
+    hosts["www.freecad.org"] = "docswww"
+    # addons.freecad.org too, and HERE rather than only in the page's startup
+    # warmup. The warmup runs on a timer and the Addon Manager can be opened before
+    # it lands; when that happens the ping goes cross-origin, COEP drops it, and the
+    # modal raised from the network callback takes the page down. This runs as part
+    # of the Addon Manager's own boot, so the host is registered on the one path
+    # that needs it, with no timing to lose.
+    hosts["addons.freecad.org"] = "addons"
+    # PyPI, for fcweb_wheels: the simple index and the file host wheels download from.
+    hosts["pypi.org"] = "pypi"
+    hosts["files.pythonhosted.org"] = "pyfiles"
+    return "www.freecad.org -> docswww, addons.freecad.org -> addons, pypi.org -> pypi, files.pythonhosted.org -> pyfiles"
+
+
+def _patch_pip():
+    """Python dependencies without pip: see fcweb_wheels.
+
+    Upstream's DependencyInstaller shells out to `python -m pip`; under emscripten
+    create_pip_call raises before pip is even tried ("Could not locate Python executable",
+    measured on production 2026-09-21, reported by the History Workbench's author whose
+    add-on depends on PyYAML -- which the image already ships). fcweb_wheels answers the
+    installer's pip calls itself: already-importable packages are reported satisfied, pure
+    Python wheels are fetched from PyPI through the proxy and unzipped into the vendor
+    directory, and compiled-only packages get a sentence that says so.
+    """
+    import fcweb_wheels
+
+    return "pip -> fcweb_wheels" if fcweb_wheels.install_hooks() else "fcweb_wheels: not emscripten, left alone"
+
+
+def _patch_requests():
+    """`requests` in the browser: see fcweb_requests (site-packages, written by the page
+    in preRun) and sitecustomize, which hooks it at import. This late call only covers a
+    `requests` that was imported before sitecustomize could see it, and reports state."""
+    import fcweb_requests
+    return fcweb_requests.install()
+
+
+def _patch_git():
+    """A `git` on PATH, answered in-process by dulwich: see fcweb_git.
+
+    The History Workbench runs git through subprocess behind a GitPort adapter and
+    checks shutil.which("git") first. Neither exists here, so it installed and did
+    nothing (launch-day report, 2026-09-21). fcweb_git puts a `git` file on PATH and
+    routes subprocess.run for it to a dulwich-backed implementation of the sixteen
+    sub-commands the workbench uses, byte-compatible with real git on every format the
+    adapter parses (scratchpad/gitshim-check.py). dulwich itself is fetched as a pure
+    wheel the first time it is needed and kept in the persisted vendor directory.
+    """
+    import fcweb_git
+
+    note = fcweb_git.install()
+    # The Addon Manager itself keeps using ZIP downloads and its metadata-based update
+    # check, exactly as before a `git` existed: upstream's own switch for that. The
+    # shim is for add-ons that shell out to git, not for the manager's clone path,
+    # which would pull every add-on's full history through the proxy.
+    try:
+        import FreeCAD
+        FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Addons").SetBool("disableGit", True)
+    except Exception:
+        pass
+
+    def done(ok):
+        print("[fcweb] dulwich %s" % ("ready" if ok else "UNAVAILABLE: git commands will fail until it installs"))
+        sys.stdout.flush()
+
+    fcweb_git.ensure_dulwich(done)
+    return note
+
+
+def _fix_stats_url():
+    """Ask for the stats file at the host that actually serves it.
+
+    The shipped preference points at https://freecad.org/addon_stats.json, which 301s to
+    the www host over plain http. The proxy rewrites that redirect now, but a 301 is
+    cached by the browser INDEFINITELY -- so anyone who loaded the page before the fix
+    keeps replaying the old one from cache and keeps getting the mixed-content block, no
+    matter what the server returns. A hard refresh does not clear it.
+
+    Asking for the www URL directly changes the proxy path (/proxy/docswww/... instead of
+    /proxy/docs/...), which is a different cache key, so the poisoned entry is bypassed
+    rather than waited out. It also removes the redirect hop entirely.
+    """
+    import addonmanager_freecad_interface as fci
+
+    prefs = fci.Preferences()
+    current = prefs.get("AddonsStatsURL") or ""
+    if current.startswith("https://freecad.org/"):
+        prefs.set("AddonsStatsURL", current.replace(
+            "https://freecad.org/", "https://www.freecad.org/", 1))
+        return "stats URL -> www host (bypasses cached 301)"
+    return "stats URL already %s" % (current or "unset")
+
+
+def _install_now():
+    """Applied the first time an Addon Manager module is importable."""
+    notes = []
+    try:
+        notes.append(_install_shadows())
+    except Exception as e:
+        notes.append("SHADOW INSTALL FAILED %r -- shipped QThread workers still in place"
+                     % (e,))
+    try:
+        notes.append(_patch_connection_checker())
+    except Exception as e:
+        notes.append("connection-checker patch FAILED %r" % (e,))
+    try:
+        import fcweb_am_install
+        notes.extend(fcweb_am_install.install())
+    except Exception as e:
+        notes.append("install patches FAILED %r" % (e,))
+    try:
+        notes.append(_fix_stats_url())
+    except Exception as e:
+        notes.append("stats URL patch FAILED %r" % (e,))
+    try:
+        notes.append(_fix_proxy_host_map())
+    except Exception as e:
+        notes.append("proxy host map patch FAILED %r" % (e,))
+    try:
+        notes.append(_patch_pip())
+    except Exception as e:
+        notes.append("pip patch FAILED %r" % (e,))
+    try:
+        notes.append(_patch_git())
+    except Exception as e:
+        notes.append("git patch FAILED %r" % (e,))
+    try:
+        notes.append(_patch_requests())
+    except Exception as e:
+        notes.append("requests patch FAILED %r" % (e,))
+    try:
+        notes.append(_stash_command())
+    except Exception as e:
+        notes.append("command stash FAILED %r" % (e,))
+    try:
+        notes.append(_patch_modal_launch())
+    except Exception as e:
+        notes.append("modal-launch patch FAILED %r" % (e,))
+    try:
+        notes.append(_patch_blocking_dialogs())
+    except Exception as e:
+        notes.append("dialog patch FAILED %r" % (e,))
+    if TRACE:
+        try:
+            notes.append(_trace_startup())
+        except Exception as e:
+            notes.append("trace patch FAILED %r" % (e,))
+    return [n for n in notes if n]
+
+
+def install():
+    """Register a lazy hook; the Addon Manager is not importable at boot."""
+    global _installed
+    if _installed:
+        return
+    _installed = True
+    print("[fcweb] addon-manager overlay active on /fcweb-am")
+    sys.stdout.flush()
+
+    # Shared sessions: the preferences page, the Edit-menu commands and the observer.
+    # Independent of the Addon Manager; failure here must not take the AM patches down.
+    try:
+        import fcweb_share
+        fcweb_share.install()
+    except Exception as e:
+        print("[fcweb] sharing overlay FAILED: %r" % (e,))
+
+    # asyncio: Emscripten has no socketpair, so CPython's selector loop cannot build its
+    # wake-up pipe and asyncio.run() fails. CAM's asset manager (tool library, tool bits)
+    # runs every store call through asyncio.run -- measured 2026-09-12 as "Failed to
+    # initialize CAM assets ... [Errno 138] Not supported" on workbench activation.
+    try:
+        import fcweb_asyncio
+        print("[fcweb] %s" % fcweb_asyncio.install())
+    except Exception as e:
+        print("[fcweb] asyncio shim FAILED: %r" % (e,))
+
+    try:
+        from PySideWrapper import QtCore
+    except ImportError:
+        from PySide6 import QtCore
+
+    # Base::Quantity <-> Python for PySide signals and slots. FreeCAD is built with
+    # FREECAD_USE_SHIBOKEN=OFF on wasm, so the registration upstream does in
+    # Gui/PythonWrapper.cpp never runs; without it every Gui::QuantitySpinBox signal
+    # connected from Python (Draft, BIM, FEM, CAM task panels) raises "parameter 0 of
+    # type Base::Quantity cannot be converted" at emit time (measured 2026-09-13).
+    try:
+        import _fcwebqt
+        print("[fcweb] Quantity converter %s" % ("registered" if _fcwebqt.install() else "already registered"))
+    except Exception as e:
+        print("[fcweb] Quantity converter FAILED: %r" % (e,))
+
+    # A real font for Coin's 2D text (the FEM colour bar's numbers, every SoText2). There is
+    # no font file anywhere in the wasm filesystem, so Coin fell back to its built-in 8x12
+    # bitmap font where the desktop (fontconfig) renders DejaVu Sans through FreeType.
+    # matplotlib ships DejaVuSans.ttf in the payload already. Coin resolves "Arial" from
+    # FreeCAD's "Helvetica,Arial,Times New Roman" through $COIN_FONT_PATH/Arial.ttf, and an
+    # unknown name ("defaultFont", "Helvetica") is handed to FT_New_Face as a path relative
+    # to the working directory, so those two get a symlink in / as well. Same GL, same
+    # FreeType, the desktop's glyphs. Measured 2026-09-14.
+    try:
+        import os
+        import matplotlib
+        ttf = os.path.join(matplotlib.get_data_path(), "fonts", "ttf", "DejaVuSans.ttf")
+        if os.path.exists(ttf):
+            fdir = "/tmp/fcweb-fonts"
+            os.makedirs(fdir, exist_ok=True)
+            # Coin does not split FreeCAD's comma list: the whole string is one font name,
+            # unknown to its table, handed to FT_New_Face as a path -- so that path exists.
+            for link in (os.path.join(fdir, "Arial.ttf"), os.path.join(fdir, "arial.ttf"),
+                         "/defaultFont", "/Helvetica", "/Helvetica,Arial,Times New Roman",
+                         "/Arial", "/Sans", "/sans"):
+                if not os.path.lexists(link):
+                    os.symlink(ttf, link)
+            os.environ["COIN_FONT_PATH"] = fdir
+            print("[fcweb] Coin 2D font: DejaVu Sans")
+        else:
+            print("[fcweb] Coin 2D font: DejaVuSans.ttf not found, built-in bitmap font stays")
+    except Exception as e:
+        print("[fcweb] Coin 2D font FAILED: %r" % (e,))
+
+    state = {"timer": None, "tries": 0, "done": False}
+
+    def _apply():
+        """Apply the patches if the Addon Manager is importable yet. True when done."""
+        if state["done"]:
+            return True
+        # FreeCAD registers Std_AddonMgr at startup, so the package is usually importable
+        # already; adding its directory covers the case where it is not.
+        for d in ("/freecad/Mod/AddonManager",):
+            if os.path.isdir(d) and d not in sys.path:
+                sys.path.append(d)
+        try:
+            import Widgets.addonmanager_utility_dialogs  # noqa: F401
+        except Exception:
+            return False
+        state["done"] = True
+        for note in _install_now():
+            print("[fcweb] addon-manager: %s" % note)
+        sys.stdout.flush()
+        return True
+
+    # Try RIGHT NOW, before any timer. Std_AddonMgr is registered at startup and a user
+    # can click it immediately; waiting even one 2 s tick leaves a window in which the
+    # command runs against the shipped QThread workers and aborts the engine. The boot
+    # gate hit exactly that window, which is how this was found.
+    if not _apply():
+        def _try():
+            state["tries"] += 1
+            if _apply() or state["tries"] > 900:   # ~30 min, then give up quietly
+                state["timer"].stop()
+
+        t = QtCore.QTimer()
+        t.timeout.connect(_try)
+        t.start(2000)
+        state["timer"] = t
+        # Held on the module so the QTimer is not garbage-collected with this frame.
+        globals()["_hook_timer"] = t
+
+
+def probe_modal_from_callback():
+    """R1 probe. ANSWERED 2026-09-03: a blocking modal from a Qt callback crashes the tab.
+
+    Kept because it is the cheapest way to re-test the question if the JSPI export list or
+    the dialog shim ever changes. Do not run it casually -- it is expected to kill the page.
+    """
+    try:
+        from PySideWrapper import QtCore, QtWidgets
+    except ImportError:
+        from PySide6 import QtCore, QtWidgets
+
+    def _from_timer():
+        try:
+            QtWidgets.QMessageBox.information(
+                None, "FCWEB probe", "Modal opened from a Qt timer callback.")
+            print("FCWEB_AM_PROBE timer_modal=ok")
+        except BaseException as e:
+            print("FCWEB_AM_PROBE timer_modal=FAILED %r" % (e,))
+        sys.stdout.flush()
+
+    def _nonblocking():
+        from addonmanager_fcweb_async import notify
+        try:
+            notify("FCWEB probe", "Non-blocking notify from a Qt timer callback.")
+            print("FCWEB_AM_PROBE timer_notify=ok")
+        except BaseException as e:
+            print("FCWEB_AM_PROBE timer_notify=FAILED %r" % (e,))
+        sys.stdout.flush()
+
+    QtCore.QTimer.singleShot(1500, _nonblocking)
+    QtCore.QTimer.singleShot(6000, _from_timer)

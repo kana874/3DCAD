@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Copyright (c) Virtastic
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue
+    url: https://github.com/Virtastic/freecad-web/security/advisories/new
+    about: Report vulnerabilities privately, not as an issue.

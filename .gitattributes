@@ -1,0 +1,26 @@
+# Patch files are BYTES, not text. Do not normalise them in either direction.
+#
+# A unified diff's context lines must match the target file byte for byte, and FreeCAD
+# 1.1.3 ships a mix: 33 of the 80 files this port touches are CRLF upstream, 47 are LF.
+# So patches/freecad.patch legitimately contains both, and any normalisation corrupts it.
+#
+# This was `text eol=lf` for exactly one commit, which is the tidy-looking choice and the
+# wrong one: it would have rewritten those 1,844 CRLF context lines to LF and reproduced
+# the failure it was meant to prevent -- GNU patch 2.8 rejects a mismatched hunk outright
+# with "different line endings", while the msys patch(1) used to generate the file
+# tolerates it silently.
+*.patch -text
+
+# Shell scripts run on the Linux build/test servers — force LF and keep them executable.
+*.sh text eol=lf
+
+# Docker reads .dockerignore line by line; a CRLF checkout leaves a trailing carriage
+# return on every pattern, so "!play-gui" silently stops matching and the build context
+# goes back to shipping tens of GB. Compose is less fussy but is kept consistent.
+.dockerignore text eol=lf
+docker-compose*.yml text eol=lf
+
+# Addon Manager overlay: these forks of upstream AddonManager modules are folded into
+# patches/freecad.patch, and that subtree is LF throughout upstream. A CRLF checkout here
+# would produce hunks whose context lines cannot match, which GNU patch rejects outright.
+/play-gui/am/*.py text eol=lf

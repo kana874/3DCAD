@@ -1,0 +1,135 @@
+#!/bin/bash
+set -e
+# --use-port=icu: FreeCAD 1.1 added find_package(ICU REQUIRED COMPONENTS uc i18n) and links
+# ICU into Base. This command was recorded before that, so it named no ICU at all and the
+# link ended in icu_68::UnicodeString / ByteSink / UMemory symbols undefined out of
+# src/Base/libFreeCADBase.a(Tools.cpp.o). The cmake link gets them through FindICU;
+# --use-port=icu is the equivalent here, and emcc picks the -mt variant because this link is
+# -pthread.
+#
+# --profiling-funcs: keep the wasm name section. Without it every stack trace is
+# "wasm-function[234225]" and a startup failure cannot be attributed -- the null-singleton
+# ValueError took four blind rounds to localize because the trace named nothing. Costs a few
+# MB that gzip mostly removes; it also serves ROADMAP item 2 (error reporting), which is
+# worthless if the reports cannot name a function.
+#
+# NOTE on -s ALLOW_MEMORY_GROWTH: this command used to pass it TWICE, valueless (=1) early
+# and =0 later. Whatever emcc does with that, the linked JS came out full of
+# GROWABLE_HEAP_F32() accessors, which is the growth-on form -- and BUILD-WEH.md is explicit
+# that growth must stay off, because the accessor rewrite invalidates every hand-derived
+# offset in tools/patch-freecad-js.py, the table that patches the GL hot path. The enabling
+# occurrence is removed; only -sALLOW_MEMORY_GROWTH=1 remains.
+#
+# NOTE on -s STACK_SIZE: the same defect, and this one had never fired. The hand-written
+# prefix below passed -sSTACK_SIZE=32MB, and upstream FreeCAD's own cmake target options
+# append "-s STACK_SIZE=5MB" AFTER it, so emcc took 5MB -- the deliberate 32MB never once
+# took effect and production has always run a 5 MB main stack. The ineffective 32MB is
+# REMOVED rather than moved to the end: 5MB is the value every green gate was measured
+# against, and raising it is a behaviour change that deserves its own gate run instead of
+# a silent ride-along on an unrelated commit. wasm64 widens stack frames, so revisit the
+# number deliberately when the pointer width changes.
+#
+# REVISITED, and that is what the single occurrence below now says: 32MB. The pointer width
+# did change. On wasm64 the first PySide binding module to initialise traps with
+#     RuntimeError: memory access out of bounds
+# inside CPython's builtin-module exec path, which aborts the import mid-way and leaves
+# PySide6/__init__.py frozen between its first import and the sys.modules alias on the next
+# line -- so every later "PySide6.QtCore" lookup fails, and libshiboken turns its own failed
+# lookup into Py_FatalError("libshiboken: could not init enum"). That is what killed the
+# boot gate of link 33979963439 in the imports scenario, after Ready.
+#
+# Measured against the alternatives before changing this: the module def of the one binding
+# that DID load is sane (_imp.exec_builtin on it returns 0), and pre-registering the dotted
+# alias before the import does not stop the trap -- so it is not the alias and not a
+# truncated def pointer. What is left is depth: shiboken registers hundreds of types in one
+# module init, every frame is wider at 64 bits, and the main thread had 5 MB while every
+# worker thread already had 16 (-sDEFAULT_PTHREAD_STACK_SIZE=16MB). 32MB is the value this
+# file always claimed to pass and never did.
+#
+# RAISED TO 64MB, and STACK_OVERFLOW_CHECK turned on, to settle one question: importing
+# ifcopenshell kills the renderer outright on wasm64, and the crash is inside
+# IfcParse::schema_by_name, which builds every compiled-in schema on first call --
+# twelve generated files, 470-676 KB each, each populate function holding thousands of
+# locals. The identical call returns the schema list on wasm32 production, and it is not
+# memory (the heap grows to 6 GB inside the gate container, measured). A stack overflow
+# in one of those generated functions is the remaining explanation that fits, and with
+# ASSERTIONS=0 it shows up as a bare renderer death rather than a message. The check
+# costs a comparison against the stack base and turns that silence into a named abort;
+# it stays on regardless of what this run proves, because the alternative is a crash
+# with no cause attached.
+#
+# GL is exported for the same reason HEAPU8 and HEAP64 are: it is the only way to ask, from
+# the page, how many WebGL contexts exist and whether any has been lost. Qt 6.11 composites
+# widgets through its own RHI GL context, that context is reported lost in a loop once a 3D
+# view exists, and production keeps exactly one canvas where this build shows several -- so
+# counting contexts as windows come and go is the next measurement, and it needs GL reachable.
+#
+# SAFE_HEAP was on here for exactly one link, to find why building IfcOpenShell's schemas
+# kills the renderer on wasm64. It is out again, and not because the question is answered:
+# SAFE_HEAP rewrites every memory access, which moves two of the 49 GL patch anchors out
+# from under their patterns, so an instrumented build can never clear the post-patch gate.
+# That build is a diagnostic tool run by hand against a hand-assembled serve tree, never
+# something to ship, and leaving the flag in the recorded link line only produces a
+# guaranteed red run. The instrumented tree still exists under scratchpad; whatever it
+# eventually says about IfcOpenShell belongs in the memory note, not in this link line.
+#
+# tools/check-link-settings.py now fails the build on any -s setting passed twice with
+# conflicting values, so a third instance of this cannot arrive unnoticed.
+#
+# Recorded link command. ROOT is derived from this script so the tree can live anywhere;
+# it previously hardcoded one developer's home directory. Run: bash scratchpad/linkcmds/<this>
+#
+# --preload-file .../Ext@/fc-ext previously named build-freecad-gui -- the NON-weh build
+# directory, which configure-gui.sh produces and configure-gui-weh.sh does not. On the build
+# machine both trees happen to exist, so it worked there and nowhere else; a clean checkout
+# has only build-freecad-gui-weh and em++ fails on the missing preload directory.
+#
+# The pivy and IfcOpenShell archives are taken from deps/wasm/lib/{pivy-mod,ifc-mod}, where
+# configure-pivy-weh.sh and configure-ifcopenshell-weh.sh STAGE them, not from
+# build-pivy-wasm/ and build-ifcopenshell/. The staged copies are what build-python-deps.yml
+# gates on and caches; the build trees are a build-machine detail. This previously named the
+# build trees and the link could not run anywhere else.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
+
+# Source the pinned toolchain rather than reaching into emsdk/ directly. This is the LINK,
+# so it is the one command where getting the target wrong wastes the most time: every
+# archive can be wasm64 and the final em++ would still emit a wasm32 module, failing after
+# an hour on thousands of "incompatible target" errors. toolchain/env.sh also sets
+# EMCC_CFLAGS=-m64 and asserts __wasm64__ before anything runs.
+source "$ROOT/toolchain/env.sh"
+# Every IfcOpenShell archive, globbed rather than listed. The list this replaces named
+# libgeometry_kernel_opencascade.a, which this build does not produce, and omitted the
+# per-schema libgeometry_mapping_ifc* / libgeometry_serializer_ifc* archives, which it does.
+# numpy, globbed for the same reason as IfcOpenShell. The recorded list named
+# lib_multiarray_umath_mtargets.a, lib_simd_mtargets.a and lib_umath_tests_mtargets.a --
+# CPU-dispatch aggregates that numpy 2.1.3 for wasm does not build at all, because there are
+# no SIMD targets to aggregate. em++ stops at the first one:
+#     lib_multiarray_umath_mtargets.a: No such file or directory
+# Module archives first (they carry the PyInit_*), then everything else; and drop the
+# per-dispatch baseline archives ONLY if aggregates exist, or the argmax/argmin symbols go
+# missing. Identical rule to configure-gui-weh.sh -- these two link lines have now drifted
+# apart four times, so keep the logic the same in both.
+if ls "$ROOT"/deps/wasm/lib/numpy-mod/*_mtargets.a >/dev/null 2>&1; then
+    _npy_skip='libnpy_(_multiarray|_pocketfft|_umath_linalg|lapack_lite)\.a|dispatch\.h_baseline\.a'
+else
+    _npy_skip='libnpy_(_multiarray|_pocketfft|_umath_linalg|lapack_lite)\.a'
+fi
+NPYLIBS="$( { ls "$ROOT"/deps/wasm/lib/numpy-mod/libnpy__multiarray_umath.a                  "$ROOT"/deps/wasm/lib/numpy-mod/libnpy__pocketfft_umath.a                  "$ROOT"/deps/wasm/lib/numpy-mod/libnpy__umath_linalg.a                  "$ROOT"/deps/wasm/lib/numpy-mod/libnpy_lapack_lite.a 2>/dev/null;               ls "$ROOT"/deps/wasm/lib/numpy-mod/*.a 2>/dev/null | grep -vE "$_npy_skip"; }             | tr '
+' ' ')"
+# Qt's BUNDLED zlib. Qt is built with its own zlib, which is compiled with Z_PREFIX, so
+# every symbol is z_-prefixed: libQt6BundledLibpng.a, libQt6BundledFreetype.a, libQt6Gui.a
+# and libQt6Svg.a all reference z_inflate, z_deflate, z_crc32, z_inflateReset2 and friends.
+# Emscripten's --use-port=zlib provides the UNPREFIXED names, so it cannot satisfy them, and
+# the link ended in nine undefined symbols across 21 errors. cmake's own Qt link pulls this
+# in through the target's interface; a hand-written link line has to name it.
+QTZLIB="$(ls "$ROOT"/qt/6.11.2/wasm_mt_weh/lib/libQt6BundledZLIB.a              "$ROOT"/qt/6.11.2/wasm_mt_weh/lib/libQt6Bundled[Zz]lib.a 2>/dev/null | head -1)"
+if [ -z "$QTZLIB" ]; then
+    echo "!! no bundled Qt zlib found. Qt's bundled libs present:" >&2
+    ls "$ROOT"/qt/6.11.2/wasm_mt_weh/lib/libQt6Bundled*.a 2>/dev/null | sed 's|.*/|     |' >&2
+    exit 1
+fi
+echo "qt bundled zlib: $QTZLIB"
+
+IFCLIBS="$( { ls "$ROOT"/deps/wasm/lib/ifc-mod/lib_ifcopenshell_wrapper.a 2>/dev/null;               ls "$ROOT"/deps/wasm/lib/ifc-mod/*.a 2>/dev/null | grep -v 'lib_ifcopenshell_wrapper\.a'; }             | tr '
+' ' ')"
+: && em++ -Wall -Wextra -Wpedantic -Wno-write-strings -fwasm-exceptions -pthread -O2 -DBOOST_ALL_NO_LIB --use-port=zlib -I$ROOT/deps/wasm/include -include $ROOT/deps/wasm/include/gl_compat.h -include $ROOT/deps/wasm/include/coin_intrusive.h -Wno-undefined-var-template -O3 -DNDEBUG -O2 -lembind -lidbfs.js -pthread -sJSPI -sJSPI_EXPORTS=fcweb_run_python,fcweb_dispatch_event -fwasm-exceptions -sALLOW_TABLE_GROWTH -sPTHREAD_POOL_SIZE=16 -sASSERTIONS=0 -sFORCE_FILESYSTEM=1 -sMODULARIZE=1 -sEXPORT_NAME=FreeCAD_entry -sDEFAULT_PTHREAD_STACK_SIZE=16MB -sINITIAL_MEMORY=1073741824 -sMAXIMUM_MEMORY=17179869184 -sMAX_WEBGL_VERSION=2 -sLEGACY_GL_EMULATION=1 -sGL_UNSAFE_OPTS=0 -sERROR_ON_UNDEFINED_SYMBOLS=0 -sFETCH -sEXPORTED_RUNTIME_METHODS=UTF16ToString,stringToUTF16,UTF8ToString,stringToUTF8,JSEvents,specialHTMLTargets,FS,ENV,callMain,ccall,HEAPU8,HEAP64,GL -sEXPORTED_FUNCTIONS=_main,__embind_initialize_bindings,_fcweb_run_python,_malloc,_free,_emscripten_get_sbrk_ptr,_fcweb_dispatch_event -Wl,--allow-multiple-definition -Wl,--wrap=_ZN16QCoreApplication9postEventEP7QObjectP6QEventi -Wl,--wrap=_ZN23QCoreApplicationPrivate16sendPostedEventsEP7QObjectiP11QThreadData -Wl,--wrap=_ZN23QCoreApplicationPrivate13notify_helperEP7QObjectP6QEvent $ROOT/weh-objs/postevent_wrap.o $ROOT/weh-objs/fcweb_export_stub.o $ROOT/weh-objs/spe_sanitize.o $ROOT/weh-objs/gl_legacy_stubs.o $ROOT/weh-objs/fcweb_dlg_module.o $ROOT/weh-objs/fcweb_gmsh_module.o $ROOT/weh-objs/fcweb_ccx_module.o $ROOT/weh-objs/fcweb_qtconv_module.o $ROOT/weh-objs/wasm_event_dispatch.o $ROOT/weh-objs/fcweb_spaceball.o  --pre-js=$ROOT/pre-gui.js --use-port=zlib --use-port=bzip2 --use-port=sqlite3 --use-port=icu $ROOT/deps/src/cpython/builddir/emscripten-mt/Modules/_decimal/libmpdec/libmpdec.a $ROOT/deps/src/cpython/builddir/emscripten-mt/Modules/_hacl/libHacl_Hash_SHA2.a $ROOT/deps/src/cpython/builddir/emscripten-mt/Modules/expat/libexpat.a -Wl,--start-group $ROOT/deps/wasm/shiboken6/lib/libshiboken6.cpython-313-wasm64-emscripten.a $ROOT/build-pyside-wasm/libpyside/libpyside6.cpython-313-wasm64-emscripten.a $ROOT/build-pyside-wasm/PySide6/QtCore/QtCore.cpython-313-wasm64-emscripten.a $ROOT/build-pyside-wasm/PySide6/QtGui/QtGui.cpython-313-wasm64-emscripten.a $ROOT/build-pyside-wasm/PySide6/QtWidgets/QtWidgets.cpython-313-wasm64-emscripten.a $ROOT/build-pyside-wasm/PySide6/QtNetwork/QtNetwork.cpython-313-wasm64-emscripten.a $ROOT/build-pyside-wasm/PySide6/QtSvg/QtSvg.cpython-313-wasm64-emscripten.a $ROOT/build-shiboken-wasm/shibokenmodule/CMakeFiles/shibokenmodule.dir/Shiboken/shiboken_module_wrapper.cpp.o $ROOT/build-freecad-gui-weh/src/Mod/Draft/App/DraftUtils.a $ROOT/deps/wasm/lib/pivy-mod/lib_coin.a $IFCLIBS $NPYLIBS  $ROOT/deps/wasm/lib/mpl-mod/libagg.a $ROOT/deps/wasm/lib/mpl-mod/libfreetype.a $ROOT/deps/wasm/lib/mpl-mod/libmpl__backend_agg.a $ROOT/deps/wasm/lib/mpl-mod/libmpl__c_internal_utils.a $ROOT/deps/wasm/lib/mpl-mod/libmpl__image.a $ROOT/deps/wasm/lib/mpl-mod/libmpl__path.a $ROOT/deps/wasm/lib/mpl-mod/libmpl__qhull.a $ROOT/deps/wasm/lib/mpl-mod/libmpl__tri.a $ROOT/deps/wasm/lib/mpl-mod/libmpl__ttconv.a $ROOT/deps/wasm/lib/mpl-mod/libmpl_ft2font.a $ROOT/deps/wasm/lib/mpl-mod/libqhull_r.a $ROOT/deps/wasm/lib/mpl-mod/libttconv.a  $ROOT/deps/wasm/lib/kiwi-mod/libkiwi__cext.a  $ROOT/deps/wasm/lib/ctypes-mod/lib_ctypes.a  $ROOT/deps/wasm/lib/libffi.a $ROOT/deps/wasm/lib/pil-mod/libpil__imaging.a  -Wl,--end-group -s MAX_WEBGL_VERSION=2 -s STACK_SIZE=64MB -s STACK_OVERFLOW_CHECK=1 -fwasm-exceptions -s SUPPORT_LONGJMP=wasm -pthread -s JSPI -sERROR_ON_UNDEFINED_SYMBOLS=1 -sEXPORT_EXCEPTION_HANDLING_HELPERS --profiling-funcs -sFETCH src/Main/CMakeFiles/FreeCADMain.dir/FreeCADMain_autogen/mocs_compilation.cpp.o src/Main/CMakeFiles/FreeCADMain.dir/MainGui.cpp.o -sENVIRONMENT=web,worker --exclude-file *.ts --exclude-file */Lib/test/* --exclude-file */femtest/* --preload-file $ROOT/deps/src/cpython/Lib@/pylib --preload-file $ROOT/build-freecad-gui-weh/Ext@/fc-ext --preload-file $ROOT/freecad-gui-install/Mod@/freecad/Mod --preload-file $ROOT/freecad-gui-install/Ext@/freecad/Ext --preload-file $ROOT/freecad-gui-install/share@/freecad/share --preload-file $ROOT/deps/src/freecad/src/Gui/Stylesheets@/freecad/share/Gui/Stylesheets --preload-file $ROOT/deps/src/freecad/src/Gui/PreferencePacks@/freecad/share/Gui/PreferencePacks --preload-file $ROOT/deps/src/freecad/src/Mod/Material/Gui/Resources/icons@/freecad/share/Mod/Material/Resources/icons --preload-file $ROOT/deps/src/freecad/data/examples@/freecad/share/examples --preload-file $ROOT/deps/wasm/pyside-pkg@/pyside-pkg  -sALLOW_MEMORY_GROWTH=1 -o bin/FreeCAD.js  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/Widgets_resources_1/.qt/rcc/qrc_qstyle_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/Widgets_resources_2/.qt/rcc/qrc_qstyle1_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/Widgets_resources_3/.qt/rcc/qrc_qstyle_fusion_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/Widgets_resources_4/.qt/rcc/qrc_qmessagebox_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/PrintSupport_resources_1/.qt/rcc/qrc_qprintdialog_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/PrintSupport_resources_2/.qt/rcc/qrc_qprintdialog1_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/Gui_resources_1/.qt/rcc/qrc_qpdf_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/Gui_resources_2/.qt/rcc/qrc_gui_shaders_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/tls/objects-Release/QTlsBackendCertOnlyPlugin_init/QTlsBackendCertOnlyPlugin_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/objects-Release/QGifPlugin_init/QGifPlugin_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/objects-Release/QICOPlugin_init/QICOPlugin_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/objects-Release/QJpegPlugin_init/QJpegPlugin_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/iconengines/objects-Release/QSvgIconPlugin_init/QSvgIconPlugin_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/objects-Release/QSvgPlugin_init/QSvgPlugin_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/QWasmIntegrationPlugin_resources_1/.qt/rcc/qrc_wasmfonts_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/lib/objects-Release/QWasmIntegrationPlugin_resources_2/.qt/rcc/qrc_wasmwindow_init.cpp.o  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/platforms/objects-Release/QWasmIntegrationPlugin_init/QWasmIntegrationPlugin_init.cpp.o  src/Gui/libFreeCADGui.a  $ROOT/deps/src/cpython/builddir/emscripten-mt/libpython3.13.a  src/Mod/Material/App/Materials.a  src/Mod/Material/Gui/MatGui.a  src/Mod/Part/App/Part.a  src/Mod/Part/Gui/PartGui.a  src/Mod/Sketcher/App/Sketcher.a  src/Mod/Sketcher/Gui/SketcherGui.a  src/Mod/PartDesign/App/_PartDesign.a  src/Mod/PartDesign/Gui/PartDesignGui.a  src/Mod/Spreadsheet/App/Spreadsheet.a  src/Mod/Spreadsheet/Gui/SpreadsheetGui.a  src/Mod/Mesh/App/Mesh.a  src/Mod/Mesh/Gui/MeshGui.a  src/Mod/Points/App/Points.a  src/Mod/Points/Gui/PointsGui.a  src/Mod/Surface/App/Surface.a  src/Mod/Surface/Gui/SurfaceGui.a  src/Mod/Measure/App/Measure.a  src/Mod/Measure/Gui/MeasureGui.a  src/Mod/Import/App/Import.a  src/Mod/Import/Gui/ImportGui.a  src/Mod/Inspection/App/Inspection.a  src/Mod/Inspection/Gui/InspectionGui.a  src/Mod/TechDraw/App/TechDraw.a  src/Mod/TechDraw/Gui/TechDrawGui.a  src/Mod/MeshPart/App/MeshPart.a  src/Mod/MeshPart/Gui/MeshPartGui.a  src/Mod/Robot/App/Robot.a  src/Mod/Robot/Gui/RobotGui.a  src/Mod/ReverseEngineering/App/ReverseEngineering.a  src/Mod/ReverseEngineering/Gui/ReverseEngineeringGui.a  src/Mod/Spreadsheet/App/Spreadsheet.a  src/Mod/Spreadsheet/Gui/SpreadsheetGui.a  src/Mod/Start/App/Start.a  src/Mod/Start/Gui/StartGui.a  src/Mod/Fem/App/Fem.a  src/Mod/Fem/Gui/FemGui.a  src/Mod/Assembly/App/AssemblyApp.a  src/Mod/Assembly/Gui/AssemblyGui.a  src/Mod/CAM/App/PathApp.a  src/Mod/CAM/PathSimulator/App/PathSimulator.a  src/Mod/CAM/PathSimulator/AppGL/CAMSimulator.a  src/Mod/CAM/Gui/PathGui.a  src/Mod/Web/App/Web.a  src/Mod/Test/Gui/QtUnitGui.a  src/Mod/Sketcher/Gui/SketcherGui.a  src/Mod/Sketcher/App/Sketcher.a  src/Mod/Surface/App/Surface.a  src/Mod/Inspection/App/Inspection.a  src/Mod/TechDraw/App/TechDraw.a  src/Mod/Measure/App/Measure.a  src/Mod/MeshPart/App/MeshPart.a  src/Mod/Robot/App/Robot.a  src/Mod/Mesh/Gui/MeshGui.a  -lGLU  src/Mod/ReverseEngineering/App/ReverseEngineering.a  src/Mod/Points/App/Points.a  src/3rdParty/libE57Format/libE57Format.a  $ROOT/deps/wasm/lib/libxerces-c.a  src/Mod/Start/App/Start.a  src/Mod/Fem/App/Fem.a  lib/libStdMeshers.a  lib/libMEFISTO2.a  lib/libSMESH.a  lib/libDriverSTL.a  lib/libDriverDAT.a  lib/libDriverUNV.a  lib/libDriver.a  lib/libSMESHDS.a  lib/libSMDS.a  $ROOT/deps/wasm/lib/libhdf5.a  $ROOT/deps/wasm/lib/libvtkFiltersExtraction-9.3.a  $ROOT/deps/wasm/lib/libvtkFiltersHyperTree-9.3.a  $ROOT/deps/wasm/lib/libvtkFiltersStatistics-9.3.a  $ROOT/deps/wasm/lib/libvtkParallelDIY-9.3.a  $ROOT/deps/wasm/lib/libvtkIOXML-9.3.a  $ROOT/deps/wasm/lib/libvtkIOXMLParser-9.3.a  $ROOT/deps/wasm/lib/libvtkexpat-9.3.a  $ROOT/deps/wasm/lib/libvtkParallelCore-9.3.a  $ROOT/deps/wasm/lib/libvtkIOLegacy-9.3.a  $ROOT/deps/wasm/lib/libvtkIOCore-9.3.a  $ROOT/deps/wasm/lib/libvtkdoubleconversion-9.3.a  $ROOT/deps/wasm/lib/libvtklz4-9.3.a  $ROOT/deps/wasm/lib/libvtklzma-9.3.a  $ROOT/deps/wasm/lib/libvtkzlib-9.3.a  $ROOT/deps/wasm/lib/libvtkFiltersSources-9.3.a  $ROOT/deps/wasm/lib/libvtkFiltersGeneral-9.3.a  $ROOT/deps/wasm/lib/libvtkFiltersVerdict-9.3.a  $ROOT/deps/wasm/lib/libvtkverdict-9.3.a  $ROOT/deps/wasm/lib/libvtkfmt-9.3.a  $ROOT/deps/wasm/lib/libvtkCommonComputationalGeometry-9.3.a  $ROOT/deps/wasm/lib/libvtkFiltersGeometry-9.3.a  $ROOT/deps/wasm/lib/libvtkFiltersCore-9.3.a  $ROOT/deps/wasm/lib/libvtkCommonExecutionModel-9.3.a  $ROOT/deps/wasm/lib/libvtkCommonDataModel-9.3.a  $ROOT/deps/wasm/lib/libvtkCommonTransforms-9.3.a  $ROOT/deps/wasm/lib/libvtkpugixml-9.3.a  $ROOT/deps/wasm/lib/libvtkCommonMisc-9.3.a  $ROOT/deps/wasm/lib/libvtkCommonMath-9.3.a  $ROOT/deps/wasm/lib/libvtkkissfft-9.3.a  -lm  $ROOT/deps/wasm/lib/libvtkCommonSystem-9.3.a  $ROOT/deps/wasm/lib/libvtkCommonCore-9.3.a  $ROOT/deps/wasm/lib/libvtksys-9.3.a  src/Mod/Spreadsheet/Gui/SpreadsheetGui.a  src/Mod/Assembly/App/AssemblyApp.a  src/Mod/PartDesign/App/_PartDesign.a  src/Mod/Spreadsheet/App/Spreadsheet.a  src/3rdParty/OndselSolver/OndselSolver/libOndselSolver.a  src/Mod/Mesh/App/Mesh.a  src/Mod/Part/Gui/PartGui.a  src/Mod/Material/Gui/MatGui.a  src/Gui/libFreeCADGui.a  $ROOT/deps/wasm/lib/libCoin.a  -lGL  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6PrintSupport.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6SvgWidgets.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6UiTools.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6OpenGLWidgets.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Widgets.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6OpenGL.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Svg.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Gui.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/libqgif.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/libqico.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/libqjpeg.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/iconengines/libqsvgicon.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/libqsvg.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/platforms/libqwasm.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6OpenGL.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Svg.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Gui.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/libqgif.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/libqico.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/libqjpeg.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/iconengines/libqsvgicon.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/imageformats/libqsvg.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/platforms/libqwasm.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6BundledHarfbuzz.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6BundledFreetype.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6BundledLibpng.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6BundledLibjpeg.a  src/Mod/CAM/App/PathApp.a  src/Mod/CAM/libarea/area.a  src/Mod/CAM/libarea/libarea-native.a  src/Mod/Import/App/Import.a  src/Mod/Part/App/Part.a  src/Mod/Material/App/Materials.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Concurrent.a  $ROOT/deps/wasm/lib/libyaml-cpp.a  $ROOT/deps/wasm/lib/libTKFillet.a  $ROOT/deps/wasm/lib/libTKMesh.a  $ROOT/deps/wasm/lib/libTKernel.a  $ROOT/deps/wasm/lib/libTKG2d.a  $ROOT/deps/wasm/lib/libTKG3d.a  $ROOT/deps/wasm/lib/libTKMath.a  $ROOT/deps/wasm/lib/libTKShHealing.a  $ROOT/deps/wasm/lib/libTKXSBase.a  $ROOT/deps/wasm/lib/libTKBool.a  $ROOT/deps/wasm/lib/libTKBO.a  $ROOT/deps/wasm/lib/libTKBRep.a  $ROOT/deps/wasm/lib/libTKTopAlgo.a  $ROOT/deps/wasm/lib/libTKGeomAlgo.a  $ROOT/deps/wasm/lib/libTKGeomBase.a  $ROOT/deps/wasm/lib/libTKOffset.a  $ROOT/deps/wasm/lib/libTKPrim.a  $ROOT/deps/wasm/lib/libTKHLR.a  $ROOT/deps/wasm/lib/libTKFeat.a  $ROOT/deps/wasm/lib/libTKDESTEP.a  $ROOT/deps/wasm/lib/libTKDEIGES.a  $ROOT/deps/wasm/lib/libTKDEGLTF.a  $ROOT/deps/wasm/lib/libTKDESTL.a  $ROOT/deps/wasm/lib/mpl-mod/libfreetype.a  $ROOT/deps/wasm/lib/libTKBin.a  $ROOT/deps/wasm/lib/libTKBinL.a  $ROOT/deps/wasm/lib/libTKCAF.a  $ROOT/deps/wasm/lib/libTKXCAF.a  $ROOT/deps/wasm/lib/libTKLCAF.a  $ROOT/deps/wasm/lib/libTKVCAF.a  $ROOT/deps/wasm/lib/libTKCDF.a  $ROOT/deps/wasm/lib/libTKService.a  $ROOT/deps/wasm/lib/libTKV3d.a  $ROOT/deps/wasm/lib/libTKRWMesh.a  src/App/libFreeCADApp.a  src/Base/libFreeCADBase.a  $ROOT/deps/wasm/lib/libboost_filesystem.a  $ROOT/deps/wasm/lib/libboost_atomic.a  $ROOT/deps/wasm/lib/libboost_program_options.a  $ROOT/deps/wasm/lib/libboost_regex.a  $ROOT/deps/wasm/lib/libboost_system.a  $ROOT/deps/wasm/lib/libboost_thread.a  $ROOT/deps/wasm/lib/libboost_date_time.a  $ROOT/deps/wasm/lib/libxerces-c.a  -lpthread  $ROOT/emsdk/upstream/emscripten/cache/sysroot/lib/wasm64-emscripten/libz.a  _deps/fmt-build/libfmt.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Xml.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Network.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/tls/libqcertonlybackend.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Network.a  $ROOT/qt/6.11.2/wasm_mt_weh/plugins/tls/libqcertonlybackend.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6Core.a  $ROOT/emsdk/upstream/emscripten/cache/sysroot/lib/wasm64-emscripten/libz.a  $ROOT/qt/6.11.2/wasm_mt_weh/lib/libQt6BundledPcre2.a $QTZLIB

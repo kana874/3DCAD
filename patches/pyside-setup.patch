@@ -1,0 +1,107 @@
+diff --git a/sources/pyside6/cmake/Macros/PySideModules.cmake b/sources/pyside6/cmake/Macros/PySideModules.cmake
+index c54b869..f0de343 100644
+--- a/sources/pyside6/cmake/Macros/PySideModules.cmake
++++ b/sources/pyside6/cmake/Macros/PySideModules.cmake
+@@ -225,7 +225,18 @@ macro(create_pyside_module)
+              "--clang-option=--target=${CMAKE_ANDROID_ARCH_LLVM_TRIPLE}")
+     endif()
+ 
+-    if(CMAKE_HOST_APPLE)
++    # Cross-compiling for WebAssembly (Emscripten): the host macOS SDK's libc++
++    # uses clang-19+ builtins (__builtin_ctzg) that libclang-18 cannot parse.
++    # Point shiboken at em++ so it detects the Emscripten target sysroot's libc++
++    # instead, and parse under the wasm target so Qt's platform #ifdefs resolve to
++    # Q_OS_WASM rather than Q_OS_MACOS.
++    if(EMSCRIPTEN)
++        message(STATUS "Building PySide bindings for Emscripten/wasm; compiler-path=${CMAKE_CXX_COMPILER}")
++        list(APPEND shiboken_command "--compiler-path=${CMAKE_CXX_COMPILER}")
++        list(APPEND shiboken_command "--clang-option=--target=wasm64-unknown-emscripten")
++    endif()
++
++    if(CMAKE_HOST_APPLE AND NOT EMSCRIPTEN)
+         set(shiboken_framework_include_dir_list ${QT_FRAMEWORK_INCLUDE_DIR})
+         make_path(shiboken_framework_include_dirs ${shiboken_framework_include_dir_list})
+         list(APPEND shiboken_command "--framework-include-paths=${shiboken_framework_include_dirs}")
+diff --git a/sources/shiboken6/libshiboken/bufferprocs_py37.cpp b/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
+index acc36bc..a9487f0 100644
+--- a/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
++++ b/sources/shiboken6/libshiboken/bufferprocs_py37.cpp
+@@ -15,6 +15,45 @@
+ 
+ #if defined(Py_LIMITED_API) && Py_LIMITED_API < 0x030B0000
+ 
++// FCWEB: same hazard as pep384impl.cpp. These limited-API stand-ins are not private to
++// libshiboken in a static wasm monolith -- they win the symbol for the whole program,
++// CPython included. PyObject_GetBuffer and PyBuffer_Release were doing exactly that (wasm
++// indices 742/743, in shiboken's object cluster rather than beside CPython's buffer code),
++// while the other five happened to lose to libpython. Which definition wins is not a thing
++// to leave to link order.
++//
++// Renaming is safe because Pep_buffer is a field-for-field re-declaration of CPython's
++// Py_buffer and the header defines one as the other, so shiboken's own call sites bind to
++// the real implementation without reinterpreting a byte.
++//
++// 6.11.2 moved this: the file now includes bufferprocs_py37.h/sbkpep.h first and guards on
++// (Py_LIMITED_API && Py_LIMITED_API < 0x030B0000) rather than a bare #ifdef Py_LIMITED_API.
++// The renames belong INSIDE that guard -- when it is false these functions are not compiled,
++// so there is no symbol to collide and nothing to rename.
++#if (defined(FCWEB_REAL_CPYTHON) || defined(__EMSCRIPTEN__)) && defined(Py_LIMITED_API)
++#  define PyObject_GetBuffer             fcweb_shib_PyObject_GetBuffer
++#  define PyBuffer_Release               fcweb_shib_PyBuffer_Release
++#  define PyBuffer_IsContiguous          fcweb_shib_PyBuffer_IsContiguous
++#  define PyBuffer_GetPointer            fcweb_shib_PyBuffer_GetPointer
++#  define PyBuffer_FromContiguous        fcweb_shib_PyBuffer_FromContiguous
++#  define PyBuffer_FillContiguousStrides fcweb_shib_PyBuffer_FillContiguousStrides
++#  define PyBuffer_FillInfo              fcweb_shib_PyBuffer_FillInfo
++
++// Forward declarations, because this file calls these before it defines them and includes
++// no header that declares them. Without the rename that worked by accident: the calls bound
++// to CPython's declarations from Python.h and then linked to the definitions below -- which
++// IS the hijack, visible in miniature.
++int PyObject_GetBuffer(PyObject *obj, Pep_buffer *view, int flags);
++int PyBuffer_IsContiguous(const Pep_buffer *view, char order);
++void *PyBuffer_GetPointer(Pep_buffer *view, Py_ssize_t *indices);
++int PyBuffer_FromContiguous(Pep_buffer *view, void *buf, Py_ssize_t len, char fort);
++void PyBuffer_FillContiguousStrides(int nd, Py_ssize_t *shape, Py_ssize_t *strides,
++                                    int itemsize, char fort);
++int PyBuffer_FillInfo(Pep_buffer *view, PyObject *obj, void *buf, Py_ssize_t len,
++                      int readonly, int flags);
++void PyBuffer_Release(Pep_buffer *view);
++#endif
++
+ // Buffer C-API for Python 3.0 (copy of cpython/Objects/abstract.c:426)
+ 
+ int
+diff --git a/sources/shiboken6/libshiboken/pep384impl.cpp b/sources/shiboken6/libshiboken/pep384impl.cpp
+index 671261f..473be73 100644
+--- a/sources/shiboken6/libshiboken/pep384impl.cpp
++++ b/sources/shiboken6/libshiboken/pep384impl.cpp
+@@ -16,6 +16,28 @@
+ #include <cstdlib>
+ #include <cstring>
+ 
++// FCWEB: this build links FULL libpython alongside limited-API shiboken. The
++// limited-API reimplementations below of CPython-standard functions then COLLIDE
++// with libpython's real ones; with -Wl,--allow-multiple-definition the linker
++// may bind CPython's own core init (type_ready -> PyStaticMethod_New) to
++// shiboken's version, which dereferences a not-yet-initialized PepStaticMethod_TypePtr
++// (NULL) and segfaults. Rename shiboken's definitions to local names so the real
++// libpython versions satisfy every external reference; shiboken's own calls still
++// resolve to the (identical-behaviour) local copies.
++// The macro below was previously the only gate, and it is defined NOWHERE in this
++// repository -- so this rename never took effect and shiboken kept winning the
++// symbols, which is what broke the 1.1.3 boot: CPython bound methods went through
++// shiboken PyMethod_New, whose PepMethod_TypePtr is still nullptr during startup.
++// Only under Py_LIMITED_API: without it shiboken defines no stand-ins and calls CPython.
++#if (defined(FCWEB_REAL_CPYTHON) || defined(__EMSCRIPTEN__)) && defined(Py_LIMITED_API)
++#  define PyRun_String       fcweb_shib_PyRun_String
++#  define PyMethod_New       fcweb_shib_PyMethod_New
++#  define PyMethod_Function  fcweb_shib_PyMethod_Function
++#  define PyMethod_Self      fcweb_shib_PyMethod_Self
++#  define PyStaticMethod_New fcweb_shib_PyStaticMethod_New
++#endif
++
++
+ extern "C"
+ {
+ 
