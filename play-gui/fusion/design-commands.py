@@ -97,6 +97,7 @@ def current_state(app, gui):
         "sketchEdit": in_edit,
         "selectionCount": selected,
         "gridShown": bool(getattr(getattr(sketch_in_edit(gui), "ViewObject", None), "ShowGrid", False)),
+        "activeSketch": getattr(sketch_in_edit(gui), "Name", None),
         "available": available,
     }
 
