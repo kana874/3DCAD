@@ -42,7 +42,7 @@
     message.dataset.error=error?'true':'false';
   }
   function hint(s){
-    if(!s?.document)return '① 新規設計 → ② スケッチ開始 → ③ 平面選択';
+    if(!s?.document)return '① 新規設計 → ② スケッチ開始（ボディ自動作成） → ③ 平面選択';
     if(s.sketchEdit)return 'スケッチ編集中：形状と寸法を作り、「スケッチ終了」。';
     if(s.selectionCount)return '対象を選択中：押し出し・切り取り・修正が使えます。';
     return '新規スケッチを作成するか、モデルツリーで対象を選択してください。';
@@ -71,11 +71,31 @@
       b.title=c[3];b.disabled=!enabled(c);
       const icon=document.createElement('span');icon.className='fd-icon';icon.textContent=c[4];
       const label=document.createElement('span');label.textContent=c[1];
-      b.append(icon,label);b.addEventListener('click',()=>send(c[0]));actions.appendChild(b);
+      b.append(icon,label);b.addEventListener('click',()=>begin(c[0]));actions.appendChild(b);
     }
     stage.textContent=ready?hint(state):'FreeCADの起動を確認中…';
   }
-  function send(action){
+  function begin(action){
+    // For a new design, Fusion users should be able to start sketching without
+    // knowing about FreeCAD's mandatory Part Design Body container.
+    if(action==='sketch'&&state?.document&&!state.hasBody){
+      inform('ボディを自動作成してからスケッチを開きます。');
+      send('body',result=>{
+        if(!result.ok){
+          inform('ボディを作成できません。ツリーを確認してください。',true);
+          return;
+        }
+        setTimeout(()=>{
+          if(!pending&&canRun())send('sketch');
+          else inform('ボディを作成しました。もう一度「スケッチ開始」を押してください。');
+        },850);
+      });
+      return;
+    }
+    send(action);
+  }
+  function send(action,done){
+
     if(pending||!allow.has(action)||!source||!canRun()){
       if(action!=='state')inform('FreeCADの準備または操作完了を待ってください。',true);
       return;
@@ -106,6 +126,8 @@
           render();
           if(action!=='state'||!result.ok)inform(result.message||'実行を確認しました。',!result.ok);
           if(result.error)console.warn('[fusion-design]',result.error);
+          if(action!=='state')console.info('[fusion-design]',action,result.command||'',result.message);
+          if(done)done(result);
         }else if(++tries>100){
           clearInterval(timer);pending=false;render();
           inform('FreeCADから応答がありません。操作パネルを確認してください。',true);
