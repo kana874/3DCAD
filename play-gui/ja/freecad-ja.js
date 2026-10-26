@@ -13,11 +13,14 @@
   // deliberately stable while static fonts are validated.
   const query = new URLSearchParams(location.search);
   const requestedMode = query.get('fontMode');
-  const mode = ['static', 'static-register'].includes(requestedMode)
-    ? requestedMode
-    : (query.get('experimentalFont') === '1' ? 'variable' : 'off');
+  // The fixed-weight Japanese TTF and setLocale/updateLocale passed an
+  // end-to-end browser smoke test. Default to Japanese UI, while allowing an
+  // explicit safe opt-out (?fontMode=off) if a browser font engine traps.
+  const mode = requestedMode === 'off' ? 'off'
+    : (['static', 'static-register'].includes(requestedMode) ? requestedMode
+    : (query.get('experimentalFont') === '1' ? 'variable' : 'static'));
   if (mode === 'off') {
-    console.info('[freecad-web-ja] CJK font registration disabled (safe mode)');
+    console.info('[freecad-web-ja] CJK font disabled by explicit opt-out');
     return;
   }
   const fontPath = mode.startsWith('static')
