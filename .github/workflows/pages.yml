@@ -11,6 +11,7 @@ on:
       - play-gui/ja/**
       - scripts/build_pages.py
       - scripts/localize_freecad.py
+      - scripts/build_static_jp_font.py
       - pages/**
       - tests/test_pages.py
       - tests/test_pages_sw.mjs
@@ -59,6 +60,8 @@ jobs:
           test -s _site/FreeCAD.wasm.gz
           test -s _site/FreeCAD.data.gz
           test -s _site/ja/NotoSansJP-VF.ttf
+          test -s _site/ja/NotoSansJP-Static.ttf
+          test -s _site/ja/fonts-static.json
           test -s _site/i18n/index.json
           grep -q "coi-boot.js" _site/index.html
           grep -q "FreeCAD.wasm.gz?v=" _site/index.html

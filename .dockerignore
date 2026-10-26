@@ -19,3 +19,5 @@
 # Japanese-only custom frontend patcher (Dockerfile.ja)
 !scripts/
 !scripts/localize_freecad.py
+
+!scripts/build_static_jp_font.py

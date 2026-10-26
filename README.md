@@ -4,6 +4,21 @@
 
 > **現状: Dockerビルド・静的配信テスト成功、ブラウザの日本語描画は未検証。** 日本語表示を保証する完成ビルドではありません。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
 
+## 静的日本語TrueTypeフォントの診断モード（2026-10-26）
+
+最新のEdge 155実機ではFreeCADが起動するものの、Qtのメニューと初期設定画面で日本語が「□」になる。Qt WASM標準のDejaVu系フォントには日本語文字が不足しており、通常のCSSフォント指定ではQt Canvas内に適用されない。
+
+可変Noto Sans JPを追加した従来の方式では、QFontEngineFT::initでWebAssembly function signature mismatchが発生した報告がある。原因はまだ確定していないため、**通常起動は安定優先で従来のまま**とし、固定ウェイト400の静的TTFを作って選択できるようにした。
+
+**試験用（作業中の図面・機密情報を使わずに確認）**
+
+- `https://kana874.github.io/3DCAD/?fontMode=static-register`：静的フォントを読み込んでQtに登録するだけ。UIフォントは変更しない。登録時のクラッシュ有無を調査。
+- `https://kana874.github.io/3DCAD/?fontMode=static`：登録に加え、Qtのアプリケーションフォントとして設定する。日本語表示改善を試す。**起動失敗やクラッシュの可能性がある試験機能。**
+- 通常の `https://kana874.github.io/3DCAD/` は変更せず、実験的な登録を行わない。
+- 以前の `?experimentalFont=1` は可変フォントの比較診断用として残している。
+
+固定ウェイトフォントはGoogle FontsのNoto Sans JP（SIL OFL）をDockerビルド中にfontToolsで生成し、漢字のcmapと可変フォントテーブルが残らないことを検証する。公開Pagesに配布されるファイルはブラウザ内でのみ使われる。Qtのレンダラに依存するため、ビルドやFontDB登録成功だけで正常描画を保証しない。
+
 ## 2026-10-26: Qtフォント処理のfunction signature mismatch切り分け
 
 Edge 155でFreeCAD起動中に `QFontEngineFT::init` → `QWasmFontDatabase::fontEngine` で `RuntimeError: function signature mismatch` が再現したため、WebAssembly/Qtのフォント登録を通常起動から切り離しました。これは**原因の断定ではなく、A/B診断用の暫定対処**です。

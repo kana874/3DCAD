@@ -54,7 +54,7 @@ def site(site_dir, base, version):
     # filesystem unless explicitly testing its font engine. The font loader
     # may trap on certain Edge/Chrome combinations with signature mismatch.
     html = replace_one(html, 'preload: ["/ja/fonts.json"]',
-                       'preload: (new URLSearchParams(location.search).get("experimentalFont") === "1" ? ["ja/fonts.json"] : [])', "Qt preload")
+                       'preload: ((new URLSearchParams(location.search).get("fontMode") || "").startsWith("static") ? ["ja/fonts-static.json"] : (new URLSearchParams(location.search).get("experimentalFont") === "1" ? ["ja/fonts.json"] : []))', "Qt preload")
     # The pinned production Docker image stamps ?v=<content-hash> while our
     # unit fixture does not. Match both forms, never the comment text.
     html, n_wasm = re.subn(
@@ -128,12 +128,13 @@ def site(site_dir, base, version):
     (site_dir / "index.html").write_text(html, encoding="utf-8")
 
     # VFS preloading references must be relative to the project site's base.
-    font_manifest = site_dir / "ja" / "fonts.json"
-    fonts = json.loads(font_manifest.read_text(encoding="utf-8"))
-    for entry in fonts:
-        if entry["source"].startswith("/ja/"):
-            entry["source"] = "ja/" + entry["source"][4:]
-    font_manifest.write_text(json.dumps(fonts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for name in ("fonts.json", "fonts-static.json"):
+        font_manifest = site_dir / "ja" / name
+        fonts = json.loads(font_manifest.read_text(encoding="utf-8"))
+        for entry in fonts:
+            if entry["source"].startswith("/ja/"):
+                entry["source"] = "ja/" + entry["source"][4:]
+        font_manifest.write_text(json.dumps(fonts, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     manifest = site_dir / "manifest.webmanifest"
     data = json.loads(manifest.read_text(encoding="utf-8"))
