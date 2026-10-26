@@ -9,6 +9,7 @@ on:
       - Dockerfile.ja
       - .dockerignore
       - play-gui/ja/**
+      - play-gui/fusion/**
       - scripts/build_pages.py
       - scripts/localize_freecad.py
       - scripts/build_static_jp_font.py
@@ -57,6 +58,9 @@ jobs:
         run: |
           set -euo pipefail
           test -s _site/index.html
+          test -s _site/fusion/fusion-mode.js
+          test -s _site/fusion/fusion-mode.py
+          grep -q '/fusion/fusion-mode.js' _site/index.html
           test -s _site/sw.js
           grep -q 'FreeCAD.wasm.gz' _site/sw.js
           test -s _site/FreeCAD.js
