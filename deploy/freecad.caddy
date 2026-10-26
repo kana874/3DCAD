@@ -1,0 +1,21 @@
+# Edge vhost for freecad.virtastic.app — deployed as a drop-in into the shared edge Caddy's
+# sites dir (on the VPS: /opt/edge/sites/freecad.caddy; imported by /opt/edge/Caddyfile via
+# `import sites/*.caddy`). The shared edge terminates TLS with the Cloudflare Origin cert and
+# reverse-proxies to the freecad container by name on the shared docker network.
+#
+# The container's own nginx already sets COOP/COEP/CORP (required for SharedArrayBuffer); those
+# response headers pass through this reverse_proxy. So this vhost deliberately does NOT set them
+# again (duplicate COOP/COEP breaks crossOriginIsolated) and does NOT `encode` (would interfere
+# with the large raw .wasm/.data and Range requests).
+freecad.virtastic.app {
+	tls /certs/virtastic.crt /certs/virtastic.key
+	# sec_headers sends X-Frame-Options SAMEORIGIN for every site on this edge. FreeCAD is
+	# meant to be embedded (?embed=1, GitHub #3), so this vhost alone drops it. Embedding
+	# still needs the host page to be cross-origin isolated, which no header here can grant.
+	# BEFORE the import: the snippet's block is deferred (it deletes a header), deferred
+	# header ops run innermost first, and after it this delete ran first and was overwritten
+	# (measured: the deploy's edge check still saw SAMEORIGIN). The outermost runs last.
+	header -X-Frame-Options
+	import sec_headers
+	reverse_proxy freecad:80
+}

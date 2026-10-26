@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+# Derived from ghcr.io/virtastic/freecad-web:1.0.8; preserves its engine and notices.
+# Build: docker build -f Dockerfile.ja -t freecad-web-ja:local .
+FROM ghcr.io/virtastic/freecad-web:1.0.8 AS base
+
+FROM python:3.12-alpine AS japanese
+RUN apk add --no-cache ca-certificates curl
+WORKDIR /stage
+COPY --from=base /usr/share/nginx/html/freecad-gui.html ./play-gui/freecad-gui.html
+COPY --from=base /usr/share/nginx/html/manifest.webmanifest ./play-gui/manifest.webmanifest
+COPY scripts/localize_freecad.py ./scripts/localize_freecad.py
+RUN python scripts/localize_freecad.py play-gui/freecad-gui.html \
+ && python scripts/localize_freecad.py --check play-gui/freecad-gui.html
+RUN mkdir -p ja \
+ && curl --fail --location --retry 3 \
+   'https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf' \
+   -o ja/NotoSansJP-VF.ttf \
+ && curl --fail --location --retry 3 \
+   'https://raw.githubusercontent.com/google/fonts/main/ofl/notosansjp/OFL.txt' \
+   -o ja/OFL.txt \
+ && python -c "from pathlib import Path; p=Path('ja/NotoSansJP-VF.ttf'); assert p.stat().st_size>1000000 and p.read_bytes()[:4] in (b'\x00\x01\x00\x00',b'OTTO')"
+
+FROM base
+COPY --from=japanese /stage/play-gui/freecad-gui.html /usr/share/nginx/html/freecad-gui.html
+COPY --from=japanese /stage/play-gui/manifest.webmanifest /usr/share/nginx/html/manifest.webmanifest
+COPY play-gui/ja/fonts.json play-gui/ja/freecad-ja.js /usr/share/nginx/html/ja/
+COPY --from=japanese /stage/ja/NotoSansJP-VF.ttf /usr/share/nginx/html/ja/NotoSansJP-VF.ttf
+COPY --from=japanese /stage/ja/OFL.txt /usr/share/nginx/html/ja/OFL.txt
+# License notices for the upstream FreeCAD application remain in the base image.
+EXPOSE 80

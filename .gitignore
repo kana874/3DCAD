@@ -1,0 +1,118 @@
+# === Vendored toolchains (multi-GB, not source) ===
+# emsdk* covers the pinned toolchain: emsdk (6.0.9, compiles and links, wasm64).
+# The emsdk2 wasm-opt shim is gone -- see BUILD-WEH.md.
+/emsdk*/
+/qt/
+/deps/
+/.qtvenv/
+/toolchain/*/
+!/toolchain/env.sh
+# ...but toolchain/include/ IS source: the force-included compat headers that used to
+# exist only on the build machine. /toolchain/*/ silently swallowed them on first commit.
+!/toolchain/include/
+!/toolchain/cmake/
+
+# === Build directories ===
+# One glob rather than a hand-kept list: the enumerated form silently missed every
+# -weh directory (build-freecad-gui-weh/ above all), so CMakeCache.txt and build.ninja
+# — which embed absolute paths — were never ignored. Trailing slash matches directories
+# only, so the build-*.sh scripts at the repo root stay tracked.
+/build-*/
+/weh-objs/
+
+# === Install trees / web output ===
+/freecad-install/
+/freecad-gui-install/
+/play/
+# play-gui: track the hand-authored front-end (served by the deploy container),
+# ignore the multi-hundred-MB build artifacts (shipped via GitHub Release instead).
+/play-gui/*
+!/play-gui/freecad-gui.html
+# LGPL attribution page, served same-origin and linked from the boot screen
+!/play-gui/legal.html
+# CalculiX-on-wasm interactive demo (whitepaper/blog companion page)
+!/play-gui/calculix-demo.html
+!/play-gui/qtloader.js
+# installability assets: hand-authored / generated once, shipped in the image
+!/play-gui/manifest.webmanifest
+!/play-gui/sw.js
+!/play-gui/icon-192.png
+!/play-gui/icon-512.png
+# Addon Manager overlay: hand-authored Python that shadows the shipped workers. COPYed
+# by infra/Dockerfile and fetched at runtime by freecad-gui.html. Without this negation
+# /play-gui/* swallows it and the container serves no am/ directory at all.
+!/play-gui/am/
+# 3Dconnexion's JavaScript client, object form only (SDK licence: the source is
+# confidential and must never be committed; see play-gui/legal.html).
+!/play-gui/3dx/
+/play-gui/am/__pycache__/
+# crawler + social files: hand-authored, COPYed by infra/Dockerfile. Without these negations
+# /play-gui/* swallows them, the build context arrives without them, and the COPY fails.
+!/play-gui/og.png
+!/play-gui/robots.txt
+!/play-gui/sitemap.xml
+# sources of truth for the dialog-shim payloads embedded in freecad-gui.html.
+# Both are regenerated into the page by tools/gen-dialog-shims.py; CI fails if they drift.
+!/play-gui/wasm_dialog_shim.py
+!/play-gui/wasm_dialog_shim_jspi.py
+
+# === Compiled artifacts ===
+*.o
+*.a
+*.so
+*.dylib
+*.wasm
+*.wasm.map
+
+# spike build outputs (keep source: *.cpp *.mjs *.cjs *.sh CMakeLists.txt package.json)
+
+# === Logs ===
+aqtinstall.log
+*.log
+
+# === OS / editor cruft ===
+.DS_Store
+
+# === Node / test scratch ===
+/node_modules/
+
+# Meson cross-files are GENERATED from the .meson.in templates by
+# tools/gen-crossfiles.sh (they need absolute paths, which differ per machine).
+/*.meson
+!/*.meson.in
+
+# === Python bytecode (stray .pyc files have been committed here before) ===
+__pycache__/
+*.pyc
+
+# === OS / editor cruft ===
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# terraform local state
+*.tfstate
+*.tfstate.*
+.terraform/
+/f2c-local/
+
+# CI infra config (hosts, tokens) — never committed
+ci/jenkins/config.env
+
+# A container that inherits a Windows TMPDIR writes its cache to a path starting with a
+# drive letter, and git turns the colon into U+F03A -- so "C:" becomes a real directory
+# inside the repository. Twenty-seven pip cache blobs got committed that way once.
+
+*/AppData/Local/Temp/
+
+# Local run overrides (FCWEB_PORT / FCWEB_IMAGE) read by docker-compose.yml.
+.env
+
+# The boot gate assembles this tree beside the sources (workflow and local docker runs
+# alike); it holds a 200 MB engine copy and is never part of the repo.
+/gate-serve/
+/gate-serve-sh/
+
+# hand-assembled diagnostic serve trees (gate-serve with instrumented glue)
+/scratchpad/glserve/

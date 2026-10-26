@@ -1,0 +1,499 @@
+diff --git a/src/glue/gl.cpp b/src/glue/gl.cpp
+--- a/src/glue/gl.cpp
++++ b/src/glue/gl.cpp
+@@ -580,6 +580,23 @@
+ {
+   void * ptr = NULL;
+ 
++#ifdef __EMSCRIPTEN__
++  /* Coin resolves every GL entry point past the 1.1 core through a platform getprocaddress
++     backend (WGL/EGL/GLX). None are compiled in for wasm and cc_dl_sym() has no library
++     handle, so EVERY dynamic lookup returned NULL. That is not just a missing-feature
++     problem: Coin calls some of those pointers unconditionally, e.g.
++     SoGLMultiTextureImageElement::updateGL() -> cc_glglue_glActiveTexture(), which trapped
++     with "RuntimeError: null function" on any textured model (BIMExample). emscripten
++     resolves GL entry points by name via emscripten_GetProcAddress() (the resolver it also
++     exposes as eglGetProcAddress/glfwGetProcAddress in system/lib/gl/libprocaddr.c),
++     available whenever GL_ENABLE_GET_PROC_ADDRESS is on (the default). */
++  {
++    extern void * emscripten_GetProcAddress(const char * name);
++    ptr = emscripten_GetProcAddress(symname);
++    if (ptr) goto returnpoint;
++  }
++#endif
++
+   // FIXME: also supply 'glue' to coin_[x]gl_getprocaddress()
+   ptr = coin_wgl_getprocaddress(glue, symname);
+   if (ptr) goto returnpoint;
+@@ -654,6 +671,7 @@
+ {
+   char buffer[256];
+   char * dotptr;
++  char * verstart;
+ 
+   /* NB: if you are getting a crash here, it's because an attempt at
+    * setting up a cc_glglue instance was made when there is no current
+@@ -669,10 +687,17 @@
+ 
+   (void)strncpy(buffer, (const char *)w->versionstr, 255);
+   buffer[255] = '\0'; /* strncpy() will not null-terminate if strlen > 255 */
+-  dotptr = strchr(buffer, '.');
++  verstart = buffer;
++  /* Desktop GL reports "<major>.<minor>[.<release>] <vendor>", but OpenGL ES / WebGL report
++     "OpenGL ES <major>.<minor> <vendor>" (emscripten: "OpenGL ES 3.0 (WebGL 2.0 (OpenGL ES
++     3.0 Chromium))"). atoi() on that leading text returns 0, so the version parsed as 0.0 and
++     EVERY version-gated block was skipped -- including the GL 1.3 multitexture block, leaving
++     glActiveTexture NULL and trapping on any textured model. Skip the non-numeric prefix. */
++  while (*verstart && (*verstart < '0' || *verstart > '9')) verstart++;
++  dotptr = strchr(verstart, '.');
+   if (dotptr) {
+     char * spaceptr;
+-    char * start = buffer;
++    char * start = verstart;
+     *dotptr = '\0';
+     w->version.major = atoi(start);
+     start = ++dotptr;
+@@ -1332,6 +1357,28 @@
+     if (env && (atoi(env) > 0)) { w->glBindBuffer = NULL; }
+   }
+ 
++#ifdef __EMSCRIPTEN__
++  /* Keep VBO rendering OFF on wasm -- deliberately, and MEASURED. Now that the lookups above
++     actually resolve, Coin would take its VBO path; that is a large regression here. A/B on a
++     quiet machine with a 15MB/626-solid STEP assembly: immediate mode is responsive at 245s,
++     while the VBO build never became responsive within 600s and a repeat run killed the tab
++     (scene-build uploads went 7.3MB -> 36.7MB). emscripten's GLImmediate emulation is well
++     optimised for this workload, whereas Coin's VBO path allocates a buffer per scene node
++     across hundreds of solids. Nulling glBindBuffer makes cc_glglue_has_vertex_buffer_object()
++     return FALSE, which is exactly the pre-existing (fast) behaviour -- while everything else,
++     notably glActiveTexture, now resolves properly.
++
++     Runtime-selectable since 2026-08-31: the measurement above is about Coin's per-NODE
++     buffers across hundreds of solids, which says nothing about a single imported mesh --
++     one node, one buffer, and the whole point of a VBO is that its vertices stop crossing
++     the wasm/JS boundary every frame. FCWEB_VBO=1 (the page sets it from ?vbo=1) opts in.
++     The DEFAULT IS UNCHANGED: absent or 0 leaves glBindBuffer NULL, exactly as measured. */
++  {
++    const char * fcvbo = coin_getenv("FCWEB_VBO");
++    if (!(fcvbo && atoi(fcvbo) > 0)) { w->glBindBuffer = NULL; }
++  }
++#endif
++
+   /*
+     Sylvain Carette reported problems with some old 3DLabs drivers and VBO rendering.
+     The drivers were from 2006, so we disable VBO rendering if 3DLabs and that driver
+@@ -1354,11 +1401,26 @@
+         !w->glIsBuffer ||
+         !w->glBufferData ||
+         !w->glBufferSubData ||
++#if !defined(__EMSCRIPTEN__)
++        /* WebGL has no client-side buffer mapping and no buffer readback, so these four
++           NEVER resolve in wasm: glGetBufferSubData, glMapBuffer, glUnmapBuffer and
++           glGetBufferPointerv are absent from emscripten's GL entirely (verified against
++           the linked FreeCAD.js, 2026-08-31). Requiring them here nulled glBindBuffer and
++           forced immediate mode for everything -- meaning a mesh's every vertex crossed
++           the wasm/JS boundary on every single frame (measured: 59,345 vertices/frame and
++           26.8 fps rotating a 51,200-triangle STL).
++           They are safe to drop because NOTHING CALLS THEM: neither Coin's SoVBO nor
++           FreeCAD's Gui::OpenGLBuffer references map/unmap/readback anywhere -- grepped,
++           not assumed. The six that remain below (gen/delete/is/data/subdata/parameteriv)
++           are all present and are exactly what creating, filling and drawing a VBO needs.
++           This only ever runs when FCWEB_VBO=1 has already un-nulled glBindBuffer above;
++           without the opt-in the whole block is skipped and behaviour is unchanged. */
+         !w->glGetBufferSubData ||
+         !w->glMapBuffer ||
+         !w->glUnmapBuffer ||
+-        !w->glGetBufferParameteriv ||
+-        !w->glGetBufferPointerv) {
++        !w->glGetBufferPointerv ||
++#endif
++        !w->glGetBufferParameteriv) {
+       w->glBindBuffer = NULL; /* so that cc_glglue_has_vertex_buffer_object() will return FALSE */
+       if (COIN_DEBUG || coin_glglue_debug()) {
+         cc_debugerror_postwarning("glglue_init",
+@@ -2863,6 +2925,16 @@
+ cc_glglue_glActiveTexture(const cc_glglue * w,
+                           GLenum texture)
+ {
++  /* Selecting unit 0 when multitexturing is unavailable is a no-op: unit 0 is already the
++     active one. Without this, callers that (incorrectly) invoke this unconditionally crash
++     instead of degrading to single-texturing -- SoGLMultiTextureImageElement::updateGL()
++     does exactly that, which trapped with "RuntimeError: null function" on any textured
++     model under wasm. glActiveTexture is NULL there because Coin nulls the whole
++     multitexture family when a sibling is missing, and emscripten's GL emulation implements
++     no glMultiTexCoord* at all. This mirrors the guard cc_glglue_glClientActiveTexture()
++     below already has. */
++  if (!w->glActiveTexture && texture == GL_TEXTURE0)
++    return;
+   assert(w->glActiveTexture);
+   w->glActiveTexture(texture);
+ }
+@@ -2882,6 +2954,11 @@
+                             GLfloat s,
+                             GLfloat t)
+ {
++  /* emscripten's GL emulation has no glMultiTexCoord*, so this pointer is NULL on wasm and
++     the call trapped with "null function" (SoGLMultiTextureCoordinateElement::send, reached by
++     every textured face set, e.g. an Image::ImagePlane). Unit 0 is the unit a plain
++     glTexCoord sets, so degrade to it -- same shape as the glActiveTexture guard above. */
++  if (!w->glMultiTexCoord2f && target == GL_TEXTURE0) { glTexCoord2f(s, t); return; }
+   assert(w->glMultiTexCoord2f);
+   w->glMultiTexCoord2f(target, s, t);
+ }
+@@ -2891,6 +2968,8 @@
+                              GLenum target,
+                              const GLfloat * v)
+ {
++  /* same NULL glMultiTexCoord* on wasm as above: unit 0 degrades to plain glTexCoord */
++  if (!w->glMultiTexCoord2fv && target == GL_TEXTURE0) { glTexCoord2f(v[0], v[1]); return; }
+   assert(w->glMultiTexCoord2fv);
+   w->glMultiTexCoord2fv(target, v);
+ }
+@@ -2900,6 +2979,8 @@
+                              GLenum target,
+                              const GLfloat * v)
+ {
++  /* same NULL glMultiTexCoord* on wasm as above: unit 0 degrades to plain glTexCoord */
++  if (!w->glMultiTexCoord3fv && target == GL_TEXTURE0) { glTexCoord3f(v[0], v[1], v[2]); return; }
+   assert(w->glMultiTexCoord3fv);
+   w->glMultiTexCoord3fv(target, v);
+ }
+@@ -2909,6 +2990,8 @@
+                              GLenum target,
+                              const GLfloat * v)
+ {
++  /* same NULL glMultiTexCoord* on wasm as above: unit 0 degrades to plain glTexCoord */
++  if (!w->glMultiTexCoord4fv && target == GL_TEXTURE0) { glTexCoord4f(v[0], v[1], v[2], v[3]); return; }
+   assert(w->glMultiTexCoord4fv);
+   w->glMultiTexCoord4fv(target, v);
+ }
+diff --git a/src/shapenodes/SoAsciiText.cpp b/src/shapenodes/SoAsciiText.cpp
+index da4fca8..fafc9b2 100644
+--- a/src/shapenodes/SoAsciiText.cpp
++++ b/src/shapenodes/SoAsciiText.cpp
+@@ -315,11 +315,36 @@ SoAsciiText::initClass(void)
+   SO_NODE_INTERNAL_INIT_CLASS(SoAsciiText, SO_FROM_INVENTOR_2_1|SoNode::VRML1);
+ }
+ 
+-// Doc in parent.
++#if defined(__EMSCRIPTEN__)
++#include <vector>
++// Defined in the FreeCAD-Web harness (gl_legacy_stubs.c): draws text triangles
++// through the GL emulation's client-array path, bypassing the immediate-mode
++// batch assembly that corrupts these draws. See SoAsciiText::GLRender.
++extern "C" void fcwasm_draw_text_tris(const float * verts, int nverts);
++#endif
++
++// Reject glyph triangles whose (normalized, ~[0,1]) font-space coordinates are
++// non-finite or absurdly out of range. Guards against a wasm FreeType glyph
++// tessellator that occasionally emits stray vertices, which immediate-mode GL
++// emulation then paints as a screen-spanning fan. See call sites below.
++static inline SbBool
++coin_soascii_glyphtri_ok(const SbVec2f & a, const SbVec2f & b, const SbVec2f & c)
++{
++  const float LIMIT = 32.0f;
++  const SbVec2f * vv[3] = { &a, &b, &c };
++  for (int k = 0; k < 3; k++) {
++    const float x = (*vv[k])[0];
++    const float y = (*vv[k])[1];
++    if (x != x || y != y) { return FALSE; }              // NaN
++    if (x > LIMIT || x < -LIMIT || y > LIMIT || y < -LIMIT) { return FALSE; }  // +/-inf and out-of-range
++  }
++  return TRUE;
++}
++
+ void
+ SoAsciiText::GLRender(SoGLRenderAction * action)
+-{  
+-  if (!this->shouldGLRender(action)) 
++{
++  if (!this->shouldGLRender(action))
+     return;
+ 
+   PRIVATE(this)->lock();
+@@ -368,9 +393,22 @@ SoAsciiText::GLRender(SoGLRenderAction * action)
+ 
+   SoMaterialBundle mb(action);
+   mb.sendFirst();
+-  
++
++#if defined(__EMSCRIPTEN__)
++  // wasm: emscripten's LEGACY_GL_EMULATION immediate-mode (glBegin/glEnd)
++  // mis-assembles these text batches — the flushed vertex stream comes out
++  // corrupt and the glyph triangles paint as a screen-spanning fan of flat
++  // wedges over the whole 3D view (Draft dimension/axis labels). Client-side
++  // vertex arrays are the code path every other Coin shape uses under the
++  // emulation and render correctly, so collect the glyph triangles and emit
++  // them via glVertexPointer/glDrawArrays instead.
++  std::vector<GLfloat> fcwasm_tris;
++  fcwasm_tris.reserve(1024);
++  #define FCWASM_TEXT_VERTEX(vx, vy) fcwasm_tris.push_back(vx); fcwasm_tris.push_back(vy); fcwasm_tris.push_back(0.0f);
++#else
+   glBegin(GL_TRIANGLES);
+   glNormal3f(0.0f, 0.0f, 1.0f);
++#endif
+ 
+   float ypos = 0.0f;
+   int i, n = this->string.getNum();
+@@ -426,6 +464,22 @@ SoAsciiText::GLRender(SoGLRenderAction * action)
+         v1 = coords[*ptr++];
+         v0 = coords[*ptr++];
+ 
++        // wasm: the dynamically-probed FreeType glyph tessellator can emit
++        // non-finite / wildly out-of-range coordinates for a subset of the
++        // triangles making up a glyph. In immediate-mode GL emulation those
++        // stray vertices land at ~infinity and paint a huge screen-spanning
++        // fan over the whole 3D view. Font-space glyph coords are normalized
++        // to roughly [0,1]; anything far outside that is corrupt -- drop the
++        // triangle so the remaining (valid) glyph geometry still renders.
++        if (!coin_soascii_glyphtri_ok(v0, v1, v2)) { continue; }
++
++#if defined(__EMSCRIPTEN__)
++        // Collect for the client-array draw after the loops (see above).
++        // Text is untextured on the wasm build.
++        FCWASM_TEXT_VERTEX(v0[0] * fontspec->size + xpos, v0[1] * fontspec->size + ypos)
++        FCWASM_TEXT_VERTEX(v1[0] * fontspec->size + xpos, v1[1] * fontspec->size + ypos)
++        FCWASM_TEXT_VERTEX(v2[0] * fontspec->size + xpos, v2[1] * fontspec->size + ypos)
++#else
+         // FIXME: Is the text textured correctly when stretching is
+         // applied (when width values have been given that are
+         // not the same as the length of the string)? jornskaa 20040716
+@@ -433,16 +487,17 @@ SoAsciiText::GLRender(SoGLRenderAction * action)
+           glTexCoord2f(v0[0] + xpos/fontspec->size, v0[1] + ypos/fontspec->size);
+         }
+         glVertex3f(v0[0] * fontspec->size + xpos, v0[1] * fontspec->size + ypos, 0.0f);
+-        
++
+         if (do2Dtextures) {
+           glTexCoord2f(v1[0] + xpos/fontspec->size, v1[1] + ypos/fontspec->size);
+         }
+         glVertex3f(v1[0] * fontspec->size + xpos, v1[1] * fontspec->size + ypos, 0.0f);
+-        
++
+         if (do2Dtextures) {
+           glTexCoord2f(v2[0] + xpos/fontspec->size, v2[1] + ypos/fontspec->size);
+         }
+         glVertex3f(v2[0] * fontspec->size + xpos, v2[1] * fontspec->size + ypos, 0.0f);
++#endif
+ 
+       }
+ 
+@@ -457,7 +512,14 @@ SoAsciiText::GLRender(SoGLRenderAction * action)
+ 
+     ypos -= fontspec->size * this->spacing.getValue();
+   }
++#if defined(__EMSCRIPTEN__)
++  #undef FCWASM_TEXT_VERTEX
++  if (!fcwasm_tris.empty()) {
++    fcwasm_draw_text_tris(fcwasm_tris.data(), (int)(fcwasm_tris.size() / 3));
++  }
++#else
+   glEnd();
++#endif
+ 
+   PRIVATE(this)->unlock();
+ 
+@@ -770,6 +832,9 @@ SoAsciiText::generatePrimitives(SoAction * action)
+         v1 = coords[*ptr++];
+         v0 = coords[*ptr++];
+ 
++        // wasm: skip corrupt glyph triangles (see coin_soascii_glyphtri_ok).
++        if (!coin_soascii_glyphtri_ok(v0, v1, v2)) { continue; }
++
+         // FIXME: Is the text textured correctly when stretching is
+         // applied (when width values have been given that are
+         // not the same as the length of the string)? jornskaa 20040716
+diff --git a/src/shapenodes/SoIndexedLineSet.cpp b/src/shapenodes/SoIndexedLineSet.cpp
+index 07007af..c56d66f 100644
+--- a/src/shapenodes/SoIndexedLineSet.cpp
++++ b/src/shapenodes/SoIndexedLineSet.cpp
+@@ -307,6 +307,20 @@ SoIndexedLineSet::GLRender(SoGLRenderAction * action)
+ 
+   mb.sendFirst(); // make sure we have the correct material
+ 
++#if defined(__EMSCRIPTEN__)
++  // wasm: Coin's lazy diffuse send does not reach the emulated fixed-function GL
++  // for the base line render, so edges/wireframe render a stale grey regardless
++  // of LineColor/ShapeColor (same class as the SoBrepFaceSet face fix). Lines are
++  // unlit, so the emulation takes the colour from the constant current colour —
++  // emit the live diffuse here (OVERALL binding; per-vertex colour arrays below
++  // still override). getDiffuse reads the correct live value.
++  if (mbind == OVERALL) {
++    const SbColor& lcol = SoLazyElement::getDiffuse(state, 0);
++    float ltr = SoLazyElement::getTransparency(state, 0);
++    glColor4f(lcol[0], lcol[1], lcol[2], 1.0F - ltr);
++  }
++#endif
++
+   if (!sendNormals) nbind = OVERALL;
+   else if (nbind == OVERALL) {
+     glNormal3fv((const GLfloat *)normals);
+diff --git a/src/rendering/SoGL.cpp b/src/rendering/SoGL.cpp
+--- a/src/rendering/SoGL.cpp
++++ b/src/rendering/SoGL.cpp
+@@ -483,6 +483,104 @@
+   }
+ }
+ 
++#if defined(__EMSCRIPTEN__)
++#include <vector>
++// FCWEB: spheres through one cached vertex array.
++//
++// Under emscripten's GL emulation the immediate-mode body of sogl_render_sphere costs
++// stacks-1 flushes per sphere (two GL_TRIANGLES caps and stacks-3 quad strips, each a
++// buffer upload, a uniform set and a draw call) plus two JS calls per vertex. Draft's
++// dimension dots are spheres: on ArchDetail they were ~1400 of the ~2500 draws in a
++// frame (2026-09-12). Same tessellation and winding as the body below, built once per
++// (stacks, slices) as an interleaved N3F_V3F unit sphere, positions scaled per call,
++// one glDrawArrays. Textured spheres keep the body (no texture coordinates here).
++namespace {
++
++struct fcwasm_sphere_mesh {
++  int stacks;
++  int slices;
++  std::vector<float> verts;   // nx ny nz x y z, unit radius, GL_TRIANGLES
++};
++
++fcwasm_sphere_mesh fcwasm_sphere_meshes[8];
++int fcwasm_sphere_next = 0;
++
++const fcwasm_sphere_mesh &
++fcwasm_sphere_mesh_for(const int stacks, const int slices)
++{
++  for (int k = 0; k < 8; k++) {
++    const fcwasm_sphere_mesh & m = fcwasm_sphere_meshes[k];
++    if (m.stacks == stacks && m.slices == slices && !m.verts.empty()) return m;
++  }
++  fcwasm_sphere_mesh & m = fcwasm_sphere_meshes[fcwasm_sphere_next++ % 8];
++  m.stacks = stacks;
++  m.slices = slices;
++  m.verts.clear();
++  const float drho = float(M_PI) / (float) (stacks - 1);
++  const float dtheta = 2.0f * float(M_PI) / (float) slices;
++  std::vector<SbVec3f> prev(slices + 1);
++  std::vector<SbVec3f> cur(slices + 1);
++  // normal == position on the unit sphere, exactly as the body pairs them
++  struct pusher {
++    std::vector<float> & v;
++    void operator()(const SbVec3f & p) const {
++      for (int pass = 0; pass < 2; pass++) { v.push_back(p[0]); v.push_back(p[1]); v.push_back(p[2]); }
++    }
++  } push = { m.verts };
++  struct ringer {
++    int slices; float dtheta;
++    void operator()(std::vector<SbVec3f> & out, const float rho) const {
++      const float tc = (float) cos(rho);
++      const float ts = - (float) sin(rho);
++      for (int j = 0; j <= slices; j++) {
++        const float th = dtheta * (float) j;
++        out[j].setValue(float(sin(th)) * ts, tc, float(cos(th)) * ts);
++      }
++    }
++  } ring = { slices, dtheta };
++  const SbVec3f top(0.0f, 1.0f, 0.0f);
++  const SbVec3f bottom(0.0f, -1.0f, 0.0f);
++  ring(prev, drho);
++  for (int j = 1; j <= slices; j++) {            // top cap: (top, ring[j-1], ring[j])
++    push(top); push(prev[j - 1]); push(prev[j]);
++  }
++  float rho = 2.0f * drho;
++  for (int i = 2; i < stacks - 1; i++, rho += drho) {   // the GL_QUAD_STRIP bands
++    ring(cur, rho);
++    for (int j = 0; j < slices; j++) {
++      push(prev[j]); push(cur[j]); push(cur[j + 1]);
++      push(prev[j]); push(cur[j + 1]); push(prev[j + 1]);
++    }
++    prev.swap(cur);
++  }
++  for (int j = 0; j < slices; j++) {             // bottom cap: (ring[j], bottom, ring[j+1])
++    push(prev[j]); push(bottom); push(prev[j + 1]);
++  }
++  return m;
++}
++
++void
++fcwasm_render_sphere_arrays(const float radius, const int stacks, const int slices)
++{
++  const fcwasm_sphere_mesh & mesh = fcwasm_sphere_mesh_for(stacks, slices);
++  static std::vector<float> scaled;
++  scaled.assign(mesh.verts.begin(), mesh.verts.end());
++  for (size_t k = 3; k + 2 < scaled.size(); k += 6) {
++    scaled[k] *= radius; scaled[k + 1] *= radius; scaled[k + 2] *= radius;
++  }
++  // One interleaved array, one stride: the emulation draws it without restriding.
++  glEnableClientState(GL_VERTEX_ARRAY);
++  glEnableClientState(GL_NORMAL_ARRAY);
++  glNormalPointer(GL_FLOAT, 6 * sizeof(float), &scaled[0]);
++  glVertexPointer(3, GL_FLOAT, 6 * sizeof(float), &scaled[3]);
++  glDrawArrays(GL_TRIANGLES, 0, (GLsizei) (scaled.size() / 6));
++  glDisableClientState(GL_VERTEX_ARRAY);
++  glDisableClientState(GL_NORMAL_ARRAY);
++}
++
++} // namespace
++#endif // __EMSCRIPTEN__
++
+ void
+ sogl_render_sphere(const float radius,
+                    const int numstacks,
+@@ -515,6 +613,22 @@
+ 
+   if (slices > 128) slices = 128;
+ 
++#if defined(__EMSCRIPTEN__)
++  // wasm: one vertex-array draw per untextured sphere (fcwasm_render_sphere_arrays above).
++  if (!(flags & (SOGL_NEED_TEXCOORDS | SOGL_NEED_3DTEXCOORDS))) {
++    fcwasm_render_sphere_arrays(radius, stacks, slices);
++    if (state && (SoComplexityTypeElement::get(state) ==
++                  SoComplexityTypeElement::OBJECT_SPACE)) {
++      SoGLCacheContextElement::shouldAutoCache(state, SoGLCacheContextElement::DO_AUTO_CACHE);
++      SoGLCacheContextElement::incNumShapes(state);
++    }
++    else {
++      SoGLCacheContextElement::shouldAutoCache(state, SoGLCacheContextElement::DONT_AUTO_CACHE);
++    }
++    return;
++  }
++#endif // __EMSCRIPTEN__
++
+   // used to cache last stack's data
+   SbVec3f coords[129];
+   SbVec3f normals[129];
+diff --git a/src/shapenodes/SoShape.cpp b/src/shapenodes/SoShape.cpp
+--- a/src/shapenodes/SoShape.cpp
++++ b/src/shapenodes/SoShape.cpp
+@@ -321,16 +321,34 @@
+ 
+ static SbStorage * soshape_staticstorage;
+ 
++#ifdef __EMSCRIPTEN__
++/* FCWEB: SbStorage::get() takes a mutex and looks the thread up in a dictionary on every
++   call, and SoShape::shapeVertex() calls this once per vertex of every generated primitive
++   -- on a large assembly that lock/unlock pair was a quarter of a preselection ray pick
++   (2026-09-15). Per-thread storage is thread local by definition; cache the pointer. */
++static thread_local soshape_staticdata * soshape_tls_staticdata = NULL;
++#endif
++
+ static soshape_staticdata *
+ soshape_get_staticdata(void)
+ {
++#ifdef __EMSCRIPTEN__
++  if (!soshape_tls_staticdata) {
++    soshape_tls_staticdata = (soshape_staticdata*) soshape_staticstorage->get();
++  }
++  return soshape_tls_staticdata;
++#else
+   return (soshape_staticdata*) soshape_staticstorage->get();
++#endif
+ }
+ 
+ // called by atexit
+ void
+ SoShapeP::cleanup(void)
+ {
++#ifdef __EMSCRIPTEN__
++  soshape_tls_staticdata = NULL;
++#endif
+   delete soshape_staticstorage;
+   soshape_staticstorage = NULL;
+ 

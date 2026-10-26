@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Import upstream freecad-web (JA)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/freecad-web-ja
+    paths:
+      - .github/workflows/import-upstream-ja.yml
+      - tests/test_localization.py
+      - scripts/localize_freecad.py
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout customization branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/freecad-web-ja
+          persist-credentials: true
+      - name: Mirror pinned upstream source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch main https://github.com/Virtastic/freecad-web.git /tmp/freecad-web-upstream
+          git -C /tmp/freecad-web-upstream rev-parse HEAD | tee UPSTREAM_COMMIT
+          # Preserve own workflow; upstream workflows include deployment jobs
+          # that should not be enabled in this standalone derivative.
+          rsync -a --exclude='.git' --exclude='.github/workflows/' \
+            /tmp/freecad-web-upstream/ ./
+          cp /tmp/freecad-web-upstream/README.md README.upstream.md
+          cp README.ja.md README.md
+      - name: Apply Japanese localization and unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/localize_freecad.py play-gui/freecad-gui.html
+          python3 scripts/localize_freecad.py --check play-gui/freecad-gui.html
+          python3 -m unittest discover -s tests -v
+          git diff --check
+          test -f LICENSE
+          test -f NOTICE
+          test -f play-gui/ja/freecad-ja.js
+      - name: Commit source snapshot and Japanese patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No upstream changes to import."
+          else
+            git commit -m "vendor: import Virtastic freecad-web source and apply Japanese specialization"
+            git push origin HEAD:feature/freecad-web-ja
+          fi

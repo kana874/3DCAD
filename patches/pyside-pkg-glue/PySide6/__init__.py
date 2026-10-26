@@ -1,0 +1,37 @@
+# PySide6 package for the FreeCAD wasm monolith.
+# The binding modules (QtCore/QtGui/QtWidgets) are compiled INTO the executable
+# and registered in the inittab under underscore names (dotted inittab names
+# break CPython's importlib bootstrap). Import them here and alias them into
+# sys.modules under their canonical dotted names so both
+# `from PySide6 import QtCore` and `import PySide6.QtCore` work, and so
+# Shiboken's internal cross-module imports ("PySide6.QtCore") resolve.
+import sys
+import importlib
+
+__version__ = "6.11.2"
+__version_info__ = (6, 11, 2, "", "")
+__all__ = ["QtCore", "QtGui", "QtWidgets", "QtNetwork", "QtSvg"]
+__path__ = []  # mark as package
+
+# shiboken6 first: creating any Qt enum runs libshiboken's _init_enum(), which imports
+# "shiboken6.Shiboken". Importing it here means that name is already registered, so the
+# first QtCore enum does not start a nested shiboken6 import from inside this one.
+import shiboken6  # noqa: F401,E402
+
+# Order matters: QtGui pulls in QtCore, QtWidgets pulls in both.
+QtCore = importlib.import_module("QtCore_fcweb")
+sys.modules["PySide6.QtCore"] = QtCore
+QtGui = importlib.import_module("QtGui_fcweb")
+sys.modules["PySide6.QtGui"] = QtGui
+QtWidgets = importlib.import_module("QtWidgets_fcweb")
+sys.modules["PySide6.QtWidgets"] = QtWidgets
+
+# QtNetwork last: it needs QtCore, and nothing above needs it. The Addon Manager is
+# the reason it is here -- NetworkManager.py imports it before doing anything else,
+# so without this the workbench installs and then cannot fetch a thing.
+QtNetwork = importlib.import_module("QtNetwork_fcweb")
+sys.modules["PySide6.QtNetwork"] = QtNetwork
+
+# the Addon Manager's PySideWrapper imports QtSvg in the same statement as QtNetwork
+QtSvg = importlib.import_module("QtSvg_fcweb")
+sys.modules["PySide6.QtSvg"] = QtSvg

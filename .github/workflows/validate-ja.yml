@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: Validate Japanese FreeCAD Web
+on:
+  push:
+    branches:
+      - feature/freecad-web-ja
+  pull_request:
+    branches:
+      - main
+permissions:
+  contents: read
+jobs:
+  build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Source localization checks
+        run: |
+          python3 scripts/localize_freecad.py --check play-gui/freecad-gui.html
+          python3 -m unittest discover -s tests -v
+      - name: Build Japanese distribution image
+        run: docker build --progress=plain -f Dockerfile.ja -t freecad-web-ja:test .
+      - name: Verify Japanese files and HTTP response headers
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name freecad-ja-smoke -p 127.0.0.1:18080:80 freecad-web-ja:test
+          trap 'docker rm -f freecad-ja-smoke >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/ -o /tmp/freecad-ja.html; then break; fi
+            sleep 2
+          done
+          grep -q 'FreeCAD 日本語版' /tmp/freecad-ja.html
+          grep -q 'preload: \["/ja/fonts.json"\]' /tmp/freecad-ja.html
+          grep -q '/ja/freecad-ja.js' /tmp/freecad-ja.html
+          curl -fsS --head http://127.0.0.1:18080/ja/NotoSansJP-VF.ttf | grep -qi 'HTTP/1.1 200'
+          curl -fsS http://127.0.0.1:18080/ja/fonts.json | grep -q '/usr/share/fonts/NotoSansJP-VF.ttf'
+          curl -fsS --head http://127.0.0.1:18080/ | grep -qi 'Cross-Origin-Opener-Policy: same-origin'
+          curl -fsS --head http://127.0.0.1:18080/ | grep -qi 'Cross-Origin-Embedder-Policy: require-corp'
