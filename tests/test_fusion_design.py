@@ -146,6 +146,9 @@ class FusionDesignTests(unittest.TestCase):
         self.assertIn('pocket_exact',js)
         self.assertIn("send(state?.sketchEdit?'sketch_dimension':'length')",js)
         self.assertIn('fusion-integrated #screen',css)
+        self.assertIn("if(tabs.dataset.built!=='yes')",js)
+        self.assertIn("if(actions.dataset.group!==group)",js)
+        self.assertNotIn('tabs.replaceChildren()',js)
         self.assertNotIn('dispatchEvent(new MouseEvent(',js)
 if __name__=='__main__':
     unittest.main()
