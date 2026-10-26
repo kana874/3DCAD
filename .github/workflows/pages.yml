@@ -10,6 +10,7 @@ on:
       - .dockerignore
       - play-gui/ja/**
       - play-gui/fusion/**
+      - play-gui/cad/**
       - scripts/build_pages.py
       - scripts/localize_freecad.py
       - scripts/build_static_jp_font.py
@@ -17,6 +18,9 @@ on:
       - tests/test_pages.py
       - tests/test_fusion_preset.py
       - tests/test_fusion_design.py
+      - tests/test_cad_workspace.py
+      - tests/cad_workspace_e2e.cjs
+      - tests/serve_cad_fixture.py
       - tests/test_ja_runtime.py
       - tests/test_pages_sw.mjs
   pull_request:
@@ -43,11 +47,14 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_ja_runtime.py' -v
           python3 -m unittest discover -s tests -p 'test_fusion_preset.py' -v
           python3 -m unittest discover -s tests -p 'test_fusion_design.py' -v
+          python3 -m unittest discover -s tests -p 'test_cad_workspace.py' -v
       - name: Verify Service Worker fallback with a real gzip WASM stream
         run: node tests/test_pages_sw.mjs
       - name: Check Fusion modeling palette JavaScript syntax
         run: |
           node --check play-gui/fusion/design-palette.js
+          node --check play-gui/cad/workspace.js
+          python3 -m py_compile play-gui/cad/cad_core.py play-gui/cad/cad_workspace.py
           python3 -m py_compile play-gui/fusion/design-commands.py
       - name: Build Japanese FreeCAD image
         run: docker build --progress=plain -f Dockerfile.ja -t freecad-web-ja:pages .
@@ -71,6 +78,10 @@ jobs:
           test -s _site/fusion/design-palette.js
           test -s _site/fusion/design-palette.css
           test -s _site/fusion/design-commands.py
+          test -s _site/cad/workspace.js
+          test -s _site/cad/cad_core.py
+          test -s _site/cad/cad_workspace.py
+          grep -q '/cad/workspace.js' _site/index.html
           grep -q '/fusion/design-palette.js' _site/index.html
           grep -q '/fusion/fusion-mode.js' _site/index.html
           test -s _site/sw.js
@@ -101,6 +112,20 @@ jobs:
           assert sum(p.stat().st_size for p in site.rglob('*') if p.is_file())<1024**3
           print((site/'build-report.json').read_text())
           PY
+      - name: Install browser test driver
+        run: npm ci --ignore-scripts
+      - name: Exercise the native workspace in the real WASM engine
+        timeout-minutes: 8
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node tests/cad_workspace_e2e.cjs _site
+      - name: Preserve native workspace test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-workspace-test
+          path: cad-test-output/
+          if-no-files-found: ignore
       - name: Upload Pages deployment artifact
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v4

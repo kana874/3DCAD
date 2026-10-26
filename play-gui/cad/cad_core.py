@@ -1,0 +1,288 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+"""Model operations for the native workspace. No Qt widgets or browser globals.
+
+The FreeCAD document is authoritative; every public mutation is transactional.
+This first milestone deliberately uses whole closed sketches as Pad/Pocket
+profiles. Region picking is not advertised until it has a tested backend.
+"""
+from contextlib import contextmanager
+import math
+
+
+class CadError(ValueError):
+    pass
+
+
+def sketch_in_edit(gui):
+    gdoc = gui.activeDocument()
+    edit = gdoc.getInEdit() if gdoc else None
+    if isinstance(edit, (tuple, list)):
+        edit = edit[0] if edit else None
+    edit = getattr(edit, 'Object', edit)
+    return edit if getattr(edit, 'TypeId', '') == 'Sketcher::SketchObject' else None
+
+
+def body_of(obj):
+    if obj is None:
+        return None
+    if getattr(obj, 'TypeId', '') == 'PartDesign::Body':
+        return obj
+    for parent in getattr(obj, 'InListRecursive', ()):
+        if getattr(parent, 'TypeId', '') == 'PartDesign::Body':
+            return parent
+    return None
+
+
+def length(app, text, positive=True):
+    """Parse dimensions with FreeCAD's quantity parser, never Python eval."""
+    try:
+        q = app.Units.Quantity(str(text))
+        # Bare numbers mean mm. Other units must be length dimensions.
+        if q.Unit != app.Units.Unit() and q.Unit != app.Units.Quantity('1 mm').Unit:
+            raise ValueError('length unit required')
+        value = float(q.Value)
+    except Exception as error:
+        raise CadError('長さを数値と単位で入力してください（例：25 mm、2 cm）。') from error
+    if not math.isfinite(value) or abs(value) > 100000 or (positive and value <= 0):
+        raise CadError('長さは0より大きく100000 mm以下にしてください。')
+    return value
+
+
+def valid_shape(shape, single=True):
+    if shape.isNull() or not shape.isValid() or not shape.Solids:
+        raise CadError('有効なソリッドを作成できません。輪郭と加工方向を確認してください。')
+    if single and len(shape.Solids) != 1:
+        raise CadError('結合されない形状です。新規ボディを選ぶか、輪郭を見直してください。')
+
+
+@contextmanager
+def transaction(doc, label):
+    doc.openTransaction(label)
+    try:
+        yield
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception:
+        doc.abortTransaction()
+        doc.recompute()
+        raise
+
+
+def create_sketch(app, gui, plane='XY', face_selection=None):
+    """Create on a real attachment when a face is selected, not a copied pose."""
+    import Part
+    doc = app.ActiveDocument
+    if doc is None:
+        doc = app.newDocument()
+    if gui.activeDocument().getInEdit():
+        raise CadError('現在の編集を終了してからスケッチを作成してください。')
+    support = None
+    if face_selection:
+        obj, name = face_selection
+        if getattr(obj, 'TypeId', '') == 'PartDesign::Body' and obj.Tip:
+            obj = obj.Tip
+        face = obj.Shape.getElement(name)
+        if not isinstance(face.Surface, Part.Plane):
+            raise CadError('スケッチには平面を選択してください。')
+        body = body_of(obj)
+        if body is None:
+            raise CadError('この段階ではPartDesignボディの平面を選択してください。')
+        support = (obj, [name])
+    else:
+        bodies = doc.findObjects('PartDesign::Body')
+        active = gui.activeDocument().activeView().getActiveObject('pdbody')
+        body = active if active in bodies else (bodies[0] if len(bodies) == 1 else None)
+        if len(bodies) > 1 and body is None:
+            raise CadError('スケッチを置くボディをツリーで選択してください。')
+    with transaction(doc, 'スケッチを作成'):
+        if body is None:
+            body = doc.addObject('PartDesign::Body', 'Body')
+        sketch = body.newObject('Sketcher::SketchObject', 'Sketch')
+        sketch.Label = 'スケッチ'
+        if support:
+            sketch.AttachmentSupport = support
+            sketch.MapMode = 'FlatFace'
+        elif plane != 'XY':
+            normal = app.Vector(1, 0, 0) if plane == 'YZ' else app.Vector(0, -1, 0)
+            sketch.Placement.Rotation = app.Rotation(app.Vector(0, 0, 1), normal)
+    view = gui.activeDocument().activeView()
+    view.setActiveObject('pdbody', body)
+    gui.Selection.clearSelection()
+    gui.activeDocument().setEdit(sketch.Name)
+    if hasattr(sketch.ViewObject, 'ShowGrid'):
+        sketch.ViewObject.ShowGrid = True
+        if hasattr(sketch.ViewObject, 'GridAuto'):
+            sketch.ViewObject.GridAuto = True
+    return sketch
+
+
+def add_rectangle(app, sketch, width, height, x=0.0, y=0.0):
+    import Part
+    import Sketcher
+    v = app.Vector
+    corners = [v(x, y, 0), v(x + width, y, 0),
+               v(x + width, y + height, 0), v(x, y + height, 0)]
+    with transaction(sketch.Document, '寸法付き長方形'):
+        start = sketch.GeometryCount
+        for i in range(4):
+            sketch.addGeometry(Part.LineSegment(corners[i], corners[(i + 1) % 4]), False)
+        for i in range(4):
+            sketch.addConstraint(Sketcher.Constraint('Coincident', start + i, 2, start + (i + 1) % 4, 1))
+            sketch.addConstraint(Sketcher.Constraint('Horizontal' if i % 2 == 0 else 'Vertical', start + i))
+        sketch.addConstraint(Sketcher.Constraint('Distance', start, width))
+        sketch.addConstraint(Sketcher.Constraint('Distance', start + 1, height))
+
+
+def add_circle(app, sketch, diameter, x=0.0, y=0.0):
+    import Part
+    import Sketcher
+    with transaction(sketch.Document, '直径指定の円'):
+        index = sketch.addGeometry(Part.Circle(app.Vector(x, y, 0), app.Vector(0, 0, 1), diameter / 2), False)
+        sketch.addConstraint(Sketcher.Constraint('Diameter', index, diameter))
+
+
+def selected_sketch(app, gui):
+    edit = sketch_in_edit(gui)
+    if edit:
+        return edit
+    selected = gui.Selection.getSelection()
+    sketches = [o for o in selected if getattr(o, 'TypeId', '') == 'Sketcher::SketchObject']
+    if len(sketches) == 1 and len(selected) == 1:
+        return sketches[0]
+    raise CadError('閉じたスケッチを一つ選択してください。スケッチ編集中はEで直接進めます。')
+
+
+class ExtrusionSession:
+    """One transaction per accepted extrusion, abort restores preview changes.
+
+    Session owns the document until commit/cancel; the shell locks unrelated
+    editing actions. Preview is exact OCCT geometry, not an approximate mesh.
+    """
+    def __init__(self, app, gui, sketch):
+        self.app, self.gui, self.sketch = app, gui, sketch
+        self.doc = sketch.Document
+        self.body = body_of(sketch)
+        if self.body is None:
+            raise CadError('PartDesignボディ内のスケッチを選択してください。')
+        self.previous = self.body.Tip
+        if self.previous == sketch or not getattr(getattr(self.previous, 'Shape', None), 'Solids', []):
+            # A sketch can itself be Body.Tip; look for the last solid before it.
+            self.previous = next((o for o in reversed(self.body.Group)
+                                  if o != sketch and getattr(getattr(o, 'Shape', None), 'Solids', [])), None)
+        self.visibility = {o.Name: o.ViewObject.Visibility for o in self.doc.Objects}
+        self.closed = False
+        self.preview = None
+        self.doc.openTransaction('押し出し')
+        # A long-lived preview must never enter the browser's recovery copy.
+        # Resume the existing autosaver on both commit and abort; don't replace
+        # the browser persistence implementation or its prior saved files.
+        self._saver = getattr(app, '_fcweb_saver', None)
+        self._saved_save = getattr(self._saver, 'save', None)
+        self._defer_save = lambda *args, **kwargs: None
+        if self._saved_save:
+            self._saver.save = self._defer_save
+
+    def _resume_saving(self):
+        saver = getattr(self, '_saver', None)
+        if saver and saver.save is self._defer_save:
+            saver.save = self._saved_save
+            saver.dirty = True
+
+    def _check(self):
+        if self.closed or self.app.ActiveDocument != self.doc:
+            raise CadError('押し出し操作の文書が変更されました。操作をやり直してください。')
+
+    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False):
+        import Part
+        self._check()
+        if not math.isfinite(distance) or distance <= 0 or distance > 100000:
+            raise CadError('正の押し出し距離を指定してください。')
+        if through:
+            if operation != 'cut' or self.previous is None or symmetric:
+                raise CadError('貫通は既存ボディの片側切り取りで指定してください。')
+            bounds = self.previous.Shape.BoundBox
+            distance = bounds.DiagonalLength + (self.sketch.Placement.Base - bounds.Center).Length + 1
+        wires = self.sketch.Shape.Wires
+        if not wires or any(not wire.isClosed() for wire in wires):
+            raise CadError('輪郭が閉じていません。スケッチの端点を確認してください。')
+        face = Part.makeFace(wires, 'Part::FaceMakerBullseye')
+        normal = self.sketch.Placement.Rotation.multVec(self.app.Vector(0, 0, 1))
+        direction = normal * (-distance if reversed else distance)
+        if symmetric:
+            face.translate(direction * -0.5)
+        tool = face.extrude(direction)
+        if operation == 'join':
+            result = self.previous.Shape.fuse(tool) if self.previous else tool
+        elif operation == 'cut':
+            if self.previous is None:
+                raise CadError('切り取りには既存のソリッドが必要です。')
+            result = self.previous.Shape.cut(tool)
+            if abs(result.Volume - self.previous.Shape.Volume) < 1e-7:
+                raise CadError('切り取りがボディと交差していません。方向を反転してください。')
+        elif operation == 'new':
+            if self.previous is not None:
+                raise CadError('既存ボディのスケッチから新規ボディを作る機能は準備中です。')
+            result = tool
+        else:
+            raise CadError('未対応の操作です。')
+        valid_shape(result)
+        if self.preview is None:
+            self.preview = self.doc.addObject('Part::Feature', 'CADPreview')
+            self.preview.Label = 'プレビュー（未確定）'
+            self.preview.ViewObject.ShapeColor = (0.25, 0.65, 0.95)
+            self.preview.ViewObject.Transparency = 35
+            self.preview.ViewObject.Selectable = False
+        self.preview.Shape = result
+        self.preview.ViewObject.Visibility = True
+        if self.previous:
+            self.previous.ViewObject.Visibility = False
+        self.doc.recompute()
+        return result
+
+    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False):
+        self.update(distance, operation, reversed, symmetric, through)
+        try:
+            self.doc.removeObject(self.preview.Name)
+            self.preview = None
+            kind = 'PartDesign::Pocket' if operation == 'cut' else 'PartDesign::Pad'
+            feature = self.body.newObject(kind, 'Pocket' if operation == 'cut' else 'Pad')
+            feature.Profile = self.sketch
+            feature.Length = distance
+            if through:
+                feature.Type = 1  # Native Pocket: Through all (parametric).
+            # Pocket's default axis points into the support (-normal), whereas
+            # the unified dialog and preview always use the sketch +normal.
+            feature.Reversed = not reversed if operation == 'cut' else reversed
+            if 'SideType' in feature.PropertiesList:
+                feature.SideType = 'Symmetric' if symmetric else 'One side'
+            else:
+                feature.Midplane = symmetric
+            self.doc.recompute()
+            valid_shape(feature.Shape)
+            feature.Label = '切り取り' if operation == 'cut' else '押し出し'
+            self.sketch.ViewObject.Visibility = False
+            if self.previous:
+                self.previous.ViewObject.Visibility = False
+            feature.ViewObject.Visibility = True
+            self.body.Tip = feature
+            self.doc.commitTransaction()
+            self.closed = True
+            self._resume_saving()
+            return feature
+        except Exception:
+            self.cancel()
+            raise
+
+    def cancel(self):
+        if self.closed:
+            return
+        try:
+            self.doc.abortTransaction()
+            self.doc.recompute()
+            for name, visible in self.visibility.items():
+                obj = self.doc.getObject(name)
+                if obj:
+                    obj.ViewObject.Visibility = visible
+        finally:
+            self.closed = True
+            self._resume_saving()

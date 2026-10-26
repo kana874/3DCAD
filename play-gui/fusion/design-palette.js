@@ -3,6 +3,7 @@
 (() => {
   'use strict';
   const query=new URLSearchParams(location.search);
+  if(query.get('workspace')==='fusion') return;
   if(query.get('fusionMode')==='off'||query.get('designPalette')==='off'||query.get('fusionUI')==='classic') return;
   const groups=[['start','準備'],['sketch','スケッチ'],['solid','ソリッド'],['modify','修正']];
   const items=[

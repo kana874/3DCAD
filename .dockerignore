@@ -25,3 +25,5 @@
 # Ship Fusion-style FreeCAD browser bridge
 !play-gui/fusion/
 !play-gui/fusion/**
+!play-gui/cad/
+!play-gui/cad/**
