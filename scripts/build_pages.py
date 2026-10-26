@@ -55,10 +55,10 @@ def site(site_dir, base, version):
     # The pinned production Docker image stamps ?v=<content-hash> while our
     # unit fixture does not. Match both forms, never the comment text.
     html, n_wasm = re.subn(
-        r"const WASM_URL = 'FreeCAD\\.wasm(?:\\?v=[A-Za-z0-9]+)?';",
+        r"const WASM_URL = 'FreeCAD\.wasm(?:\?v=[A-Za-z0-9]+)?';",
         f"const WASM_URL = 'FreeCAD.wasm.gz?v={version}';", html)
     html, n_data = re.subn(
-        r"const DATA_URL = 'FreeCAD\\.data\\.gz\\?v=[A-Za-z0-9]+';",
+        r"const DATA_URL = 'FreeCAD\.data\.gz\?v=[A-Za-z0-9]+';",
         f"const DATA_URL = 'FreeCAD.data.gz?v={version}';", html)
     if n_wasm != 1 or n_data != 1:
         raise ValueError(f"Staged engine asset anchors: wasm={n_wasm}, data={n_data}")
