@@ -52,10 +52,16 @@ def site(site_dir, base, version):
     html = re.sub(r'(href|src)="/(?!/)', r'\1="./', html)
     html = replace_one(html, 'preload: ["/ja/fonts.json"]',
                        'preload: ["ja/fonts.json"]', "Qt preload")
-    html = replace_one(html, "const WASM_URL = 'FreeCAD.wasm';",
-                       f"const WASM_URL = 'FreeCAD.wasm.gz?v={version}';", "wasm asset")
-    html = replace_one(html, "const DATA_URL = 'FreeCAD.data.gz?v=1';",
-                       f"const DATA_URL = 'FreeCAD.data.gz?v={version}';", "data asset")
+    # The pinned production Docker image stamps ?v=<content-hash> while our
+    # unit fixture does not. Match both forms, never the comment text.
+    html, n_wasm = re.subn(
+        r"const WASM_URL = 'FreeCAD\\.wasm(?:\\?v=[A-Za-z0-9]+)?';",
+        f"const WASM_URL = 'FreeCAD.wasm.gz?v={version}';", html)
+    html, n_data = re.subn(
+        r"const DATA_URL = 'FreeCAD\\.data\\.gz\\?v=[A-Za-z0-9]+';",
+        f"const DATA_URL = 'FreeCAD.data.gz?v={version}';", html)
+    if n_wasm != 1 or n_data != 1:
+        raise ValueError(f"Staged engine asset anchors: wasm={n_wasm}, data={n_data}")
 
     helper = """// GitHub Pages does not support Content-Encoding override. Decompress the
  // versioned .gz binary in the tab, then give Emscripten the raw bytes.
