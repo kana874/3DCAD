@@ -2,7 +2,7 @@
 
 本リポジトリは [Virtastic/freecad-web](https://github.com/Virtastic/freecad-web) (FreeCAD 1.1.3 / WebAssembly) をもとにした、**日本語専用のカスタマイズ候補**です。
 
-> **現状: 未検証の開発版。** 日本語表示を保証する完成ビルドではありません。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
+> **現状: Dockerビルド・静的配信テスト成功、ブラウザの日本語描画は未検証。** 日本語表示を保証する完成ビルドではありません。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
 
 ## 実行方法
 
@@ -11,7 +11,6 @@ Windows 11 + Docker Desktop（会社の情報システム部門が許可した�
 ~~~powershell
 git clone https://github.com/kana874/3DCAD.git
 cd 3DCAD
-git checkout feature/freecad-web-ja
 docker compose -f docker-compose.ja.yml up -d --build
 ~~~
 
