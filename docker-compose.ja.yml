@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+services:
+  freecad-ja:
+    build:
+      context: .
+      dockerfile: Dockerfile.ja
+    image: freecad-web-ja:local
+    ports:
+      - "127.0.0.1:8080:80"
+    restart: unless-stopped
