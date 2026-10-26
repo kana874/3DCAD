@@ -8,6 +8,8 @@ on:
       - feature/freecad-web-ja
     paths:
       - .github/workflows/import-upstream-ja.yml
+      - tests/test_localization.py
+      - scripts/localize_freecad.py
 
 permissions:
   contents: write
