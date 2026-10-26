@@ -4,6 +4,24 @@
 
 > **現状: GUIの日本語メニューと日本語フォント表示を外部ブラウザで確認済み。** 全ワークベンチとCAD操作の互換性・会社PCでの長時間利用は未検証です。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
 
+## Fusion風・統合デザインUI（2026-10-26）
+
+通常URLで以前の「デザイン｜Fusion操作」浮動パネルを**画面上端の横長ツールバー**へ置換しました。Qtの標準メニューとネイティブツールバーを非表示にし、画面領域を再配置して3Dモデルがパネルの下に隠れないようにします。FreeCAD自体をFusionのソース・CADエンジンに置き換えたわけではなく、GUI導線の互換化です。
+
+- 横タブ：準備／スケッチ／ソリッド／修正。選択対象や編集中の状態から使用可否を判定
+- 既存ソリッドの**平面の面を選択 → スケッチ開始**：その面が所属する既存PartDesign Bodyを探してアクティブ化。新しいBodyは作らず、面選択を保持してFreeCAD標準のスケッチ開始を呼びます。複数Bodyの対象が不明な場合は安全に停止。基準平面の場合も選択対象Bodyを優先
+- ボディボタン：既存Pad/Bodyをベースフィーチャとして誤追加しないよう、一旦選択を解除して空Bodyを新規作成。**既存ボディを使う場合はボディではなく「スケッチ開始」を押す**
+- モデルツリー：左側のFreeCAD標準モデルツリーの階層矢印はそのまま利用。上端「モデルツリー」「展開」「格納」からサイドバーと階層を切替
+- スケッチグリッド：Sketcher 1.1のネイティブ`ShowGrid`/`GridAuto`を利用。スケッチ編集開始時に原則表示し、上部「グリッド」でON/OFF変更。グリッドへのスナップは別機能、初期は強制しない
+- 数値入力：上端のmm欄と「距離を適用」は、モデルツリーで選んだ既存のPartDesign Pad/Pocketの`Length`を変更し、再計算します。「寸法を拘束」はSketcher編集中に**線分1本を選んだ場合のみ**寸法拘束を追加。フリーハンド描画中にFusionのように寸法をリアルタイム入力する完全なインライン入力は未対応
+- 旧FreeCAD GUIに戻す：`https://kana874.github.io/3DCAD/?fusionUI=classic`。設計データを保存してから移動すること。新GUIの機能のみを無効化する`?designPalette=off`も残存
+
+**既知の差異**：Fusionの単一Extrudeダイアログの結合・除去・新規Bodyの切替はFreeCADではPad/Pocketが別ツール。FusionのSketcherタイムラインや真のコンテキストメニュー、3D床グリッド、スケッチ描画中の即時寸法入力は同一でない。ブラウザ上のQt GUIをフル書換えするのではなく、ネイティブ機能を活用した互換モードです。
+
+**警告**：FreeCAD 1.1.3ではSketcherグリッドにより上面視点の軸が薄くなる既知問題が報告されています。[FreeCAD issue #31702](https://github.com/FreeCAD/FreeCAD/issues/31702)。グリッドはいつでもOFF可能。実際の8GB会社PCや既存設計での動作、安全性、長時間安定性、すべての押し出し状況はまだ未検証です。
+
+**参考**（2026-10-26確認）：[Fusion公式：スケッチ作成](https://help.autodesk.com/cloudhelp/JPN/Fusion-Sketch/files/SKT-CREATE-3D-SKETCH.htm)、[スケッチ寸法](https://help.autodesk.com/cloudhelp/JPN/Fusion-Sketch/files/SKT-CREATE-DIMENSIONS.htm)、[Sketch Palette](https://help.autodesk.com/cloudhelp/JPN/Fusion-Sketch/files/GUID-4183A4B7-E002-4396-AD5A-7FF3C8B2F33A.htm)、[FreeCAD Body](https://reqrefusion.github.io/FreeCAD-Documentation-html/wiki/en/PartDesign_Body.html)、[Sketcher Grid](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/Sketcher_Grid.md)、[Pad距離](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/PartDesign_Pad.md)。参照資料の発行日不明・確認日2026-10-26。
+
 ## Fusion風のスケッチ・3Dモデリング操作（2026-10-26）
 
 [公開3DCAD](https://kana874.github.io/3DCAD/) で日本語の浮動「デザイン｜Fusion操作」パネルを使用できます。画面の左上（モデルツリーの右側）にあり、最小化・展開できます。ブラウザのQtイベント処理は変更せず、クリックされた操作のみFreeCAD標準コマンドに渡します。
