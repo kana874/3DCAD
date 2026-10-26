@@ -30,6 +30,7 @@ const __cfg = { qt: {
          preload: ["/ja/fonts.json"],
 }};
  async function init(){
+const instance = window.fcInstance = await qtLoad(__cfg);
 </script></head></html>
 """
 
