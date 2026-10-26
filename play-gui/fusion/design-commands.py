@@ -36,6 +36,7 @@ COMMANDS = {
     "linear_pattern": ("PartDesign_LinearPattern",),
     "grid": (), "tree": (), "expand_tree": (), "collapse_tree": (),
     "length": (), "sketch_dimension": (), "fusion_gui": (),
+    "pad_exact": (), "pocket_exact": (),
 }
 SKETCH_ONLY = frozenset(("line", "rectangle", "circle", "arc", "dimension",
                          "trim", "construction", "leave_sketch"))
