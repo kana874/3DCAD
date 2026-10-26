@@ -62,19 +62,40 @@
   }
   function render(){
     if(!tabs)return;
-    tabs.replaceChildren();
-    for(const [id,label] of groups){
-      const b=document.createElement('button');b.type='button';b.textContent=label;
-      b.dataset.active=String(id===group);b.setAttribute('aria-pressed',String(id===group));
-      b.addEventListener('click',()=>{group=id;render();});tabs.appendChild(b);
+    // Qt state is polled, but tabs/buttons must keep stable DOM identity.
+    // Replacing nodes every five seconds breaks browser focus, user clicks,
+    // and automated selectors (stale element IDs).
+    if(tabs.dataset.built!=='yes'){
+      for(const [id,label] of groups){
+        const button=document.createElement('button');
+        button.type='button';button.textContent=label;button.dataset.group=id;
+        button.addEventListener('click',()=>{group=id;render();});
+        tabs.appendChild(button);
+      }
+      tabs.dataset.built='yes';
     }
-    actions.replaceChildren();
-    for(const c of items.filter(x=>x[2]===group)){
-      const b=document.createElement('button');b.type='button';b.className='fd-action';
-      b.title=c[3];b.disabled=!enabled(c);
-      const icon=document.createElement('span');icon.className='fd-icon';icon.textContent=c[4];
-      const label=document.createElement('span');label.textContent=c[1];
-      b.append(icon,label);b.addEventListener('click',()=>begin(c[0]));actions.appendChild(b);
+    for(const b of tabs.querySelectorAll('button')){
+      b.dataset.active=String(b.dataset.group===group);
+      b.setAttribute('aria-pressed',String(b.dataset.group===group));
+    }
+    if(actions.dataset.group!==group){
+      actions.replaceChildren();
+      for(const c of items.filter(x=>x[2]===group)){
+        const b=document.createElement('button');b.type='button';
+        b.className='fd-action';b.dataset.action=c[0];
+        b.title=c[3];
+        const icon=document.createElement('span');
+        icon.className='fd-icon';icon.textContent=c[4];
+        const label=document.createElement('span');label.textContent=c[1];
+        b.append(icon,label);
+        b.addEventListener('click',()=>begin(c[0]));
+        actions.appendChild(b);
+      }
+      actions.dataset.group=group;
+    }
+    for(const b of actions.querySelectorAll('button')){
+      const item=items.find(x=>x[0]===b.dataset.action);
+      b.disabled=!item||!enabled(item);
     }
     stage.textContent=ready?hint(state):'FreeCADの起動を確認中…';
     if(lengthField){
