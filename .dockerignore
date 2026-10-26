@@ -16,3 +16,6 @@
 # infra/Dockerfile stage i18n: which FreeCAD release to compile translations from
 !patches/freecad.version
 !infra/session
+# Japanese-only custom frontend patcher (Dockerfile.ja)
+!scripts/
+!scripts/localize_freecad.py
