@@ -1,0 +1,24 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+#fusion-design-palette{position:fixed;z-index:2000000;top:148px;left:278px;width:min(575px,calc(100vw - 305px));font:12px/1.45 Arial,"Noto Sans JP",sans-serif;color:#273447;pointer-events:none}
+#fusion-design-palette *{box-sizing:border-box}
+#fusion-design-palette .fd-shell{pointer-events:auto;border:1px solid #bdc9d7;border-radius:9px;background:rgba(251,252,254,.97);box-shadow:0 3px 13px #1113;overflow:hidden}
+#fusion-design-palette header{display:flex;align-items:center;gap:8px;padding:5px 9px;background:#e6ecf5;border-bottom:1px solid #cdd5dd}
+#fusion-design-palette header strong{font-size:13px;white-space:nowrap}
+#fusion-design-palette .fd-subtitle{color:#566274}
+#fusion-design-palette button{font:inherit;color:inherit;cursor:pointer}
+#fusion-design-palette button:disabled{opacity:.38;cursor:not-allowed}
+#fusion-design-palette .fd-collapse{margin-left:auto;border:1px solid #aebac9;background:#fff;padding:2px 9px;border-radius:5px}
+#fusion-design-palette .fd-body{padding:6px 8px}
+#fusion-design-palette .fd-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+#fusion-design-palette .fd-tabs button{border:0;padding:4px 11px;border-radius:5px;background:#edf0f3}
+#fusion-design-palette .fd-tabs button[data-active="true"]{background:#2176c6;color:#fff;font-weight:bold}
+#fusion-design-palette .fd-actions{display:flex;flex-wrap:wrap;gap:5px}
+#fusion-design-palette .fd-action{display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;border:1px solid #b6c4d4;background:#fff;min-height:32px}
+#fusion-design-palette .fd-action:not(:disabled):hover{background:#dcecff;border-color:#4e87c3}
+#fusion-design-palette .fd-icon{font-size:15px;color:#2472aa}
+#fusion-design-palette .fd-stage{color:#5a6674;margin-top:7px;font-size:11px}
+#fusion-design-palette .fd-message{margin-top:3px;color:#146343;font-size:11px}
+#fusion-design-palette .fd-message[data-error="true"]{color:#a02c2c}
+#fusion-design-palette[data-collapsed="true"]{width:max-content;max-width:calc(100vw - 20px)}
+#fusion-design-palette[data-collapsed="true"] .fd-body{display:none}
+@media(max-width:730px){#fusion-design-palette{top:138px;left:7px;width:calc(100vw - 14px)}}
