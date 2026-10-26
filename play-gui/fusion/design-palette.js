@@ -96,7 +96,14 @@
         let result;
         try{result=JSON.parse(new TextDecoder().decode(fs.readFile(out)));}catch(_){}
         if(result&&result.requestId===id){
-          clearInterval(timer);pending=false;state=result.state||state;render();
+          clearInterval(timer);pending=false;
+          const previous=state?.sketchEdit;
+          state=result.state||state;
+          // Follow the actual sketch editor: Fusion users can draw immediately
+          // after choosing a plane, then see solid tools when closing the sketch.
+          if(typeof previous==='boolean'&&previous!==state?.sketchEdit)
+            group=state.sketchEdit?'sketch':'solid';
+          render();
           if(action!=='state'||!result.ok)inform(result.message||'実行を確認しました。',!result.ok);
           if(result.error)console.warn('[fusion-design]',result.error);
         }else if(++tries>100){
