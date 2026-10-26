@@ -14,6 +14,7 @@ on:
       - scripts/build_static_jp_font.py
       - pages/**
       - tests/test_pages.py
+      - tests/test_ja_runtime.py
       - tests/test_pages_sw.mjs
   pull_request:
     branches: [main]
@@ -34,7 +35,9 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
       - name: Check Pages conversion logic
-        run: python3 -m unittest discover -s tests -p 'test_pages.py' -v
+        run: |
+          python3 -m unittest discover -s tests -p 'test_pages.py' -v
+          python3 -m unittest discover -s tests -p 'test_ja_runtime.py' -v
       - name: Verify Service Worker fallback with a real gzip WASM stream
         run: node tests/test_pages_sw.mjs
       - name: Build Japanese FreeCAD image
