@@ -50,8 +50,11 @@ def site(site_dir, base, version):
                        "navigator.serviceWorker.register('./sw.js')", "service-worker")
     # Only browser paths, not virtual Emscripten paths such as /home/web_user/.
     html = re.sub(r'(href|src)="/(?!/)', r'\1="./', html)
+    # Avoid loading the experimental variable CJK font into Qt's WASM
+    # filesystem unless explicitly testing its font engine. The font loader
+    # may trap on certain Edge/Chrome combinations with signature mismatch.
     html = replace_one(html, 'preload: ["/ja/fonts.json"]',
-                       'preload: ["ja/fonts.json"]', "Qt preload")
+                       'preload: (new URLSearchParams(location.search).get("experimentalFont") === "1" ? ["ja/fonts.json"] : [])', "Qt preload")
     # The pinned production Docker image stamps ?v=<content-hash> while our
     # unit fixture does not. Match both forms, never the comment text.
     html, n_wasm = re.subn(
@@ -103,11 +106,15 @@ def site(site_dir, base, version):
     # findWasmBinary() to fetch FreeCAD.wasm again. Qt's documented qt.module
     # option injects instantiateWasm with a precompiled WebAssembly.Module.
     # That prevents a 404 for FreeCAD.wasm (we only publish FreeCAD.wasm.gz).
+    # Independent A/B control for Qt's precompiled module path. In
+    # 'stream' mode, Emscripten fetches /FreeCAD.wasm through our worker.
     html = replace_one(
         html, "const instance = window.fcInstance = await qtLoad(__cfg);",
-        "__cfg.qt.module = WebAssembly.compile(__fcWasmBytes);\n"
+        "if (new URLSearchParams(location.search).get('wasmMode') !== 'stream') {\n"
+        "       __cfg.qt.module = WebAssembly.compile(__fcWasmBytes);\n"
+        "     }\n"
         "     const instance = window.fcInstance = await qtLoad(__cfg);",
-        "Qt precompiled module injection")
+        "Qt WASM mode switch")
 
     # The existing app gate runs after body scripts; register COI worker early.
     insert = """<!-- freecad-ja-pages-v1: cross-origin isolation via same-origin SW -->

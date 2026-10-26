@@ -64,6 +64,8 @@ class PagesBuildTests(unittest.TestCase):
         self.assertIn("FreeCAD.wasm.gz?v=test",text)
         self.assertIn("await __fcPagesUnGzip(await __engineFetch",text)
         self.assertIn("__cfg.qt.module = WebAssembly.compile(__fcWasmBytes);",text)
+        self.assertIn("get('wasmMode') !== 'stream'",text)
+        self.assertIn('get("experimentalFont") === "1"',text)
         self.assertIn("register('./sw.js')",text)
         self.assertIn('href="./manifest.webmanifest"',text)
         self.assertIn("https://kana874.github.io/3DCAD/",text)

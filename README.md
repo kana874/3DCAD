@@ -4,6 +4,17 @@
 
 > **現状: Dockerビルド・静的配信テスト成功、ブラウザの日本語描画は未検証。** 日本語表示を保証する完成ビルドではありません。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
 
+## 2026-10-26: Qtフォント処理のfunction signature mismatch切り分け
+
+Edge 155でFreeCAD起動中に `QFontEngineFT::init` → `QWasmFontDatabase::fontEngine` で `RuntimeError: function signature mismatch` が再現したため、WebAssembly/Qtのフォント登録を通常起動から切り離しました。これは**原因の断定ではなく、A/B診断用の暫定対処**です。
+
+- **通常URL**：`https://kana874.github.io/3DCAD/` — 実験的なNoto Sans JP読み込みとQtへのフォント登録を無効化します。日本語UIは「□」表示になる可能性がありますが、クラッシュ回避を優先します。
+- **フォント診断**：`?experimentalFont=1` — 日本語フォントプリロードとQFontDatabase追加を有効化。**クラッシュの可能性があるため作業ファイルを保存してから試すこと。**
+- **WASM起動方式診断**：`?wasmMode=stream` — Qtのプリコンパイル済みWASMモジュール注入を使用せず、Service Worker経由でEmscripten標準のWASM fetch/instantiateStreamingを使用します。
+- **組み合わせ**：`?experimentalFont=1&wasmMode=stream` — 問題がフォント追加とWASM起動方式のどちらに関係するか調査するためのモード。
+
+正常に起動するかの確認には、FreeCADのメニューが表示されるまで操作せず、エラーが起きた場合はアプリの「Copy report」で診断内容を取得します。フォント変更の安全性、STEPモデル編集、8GB RAMでの長時間安定性はまだ未検証です。
+
 ## GitHub Pages（インストール不要のブラウザ版）
 
 本リポジトリのPages用GitHub Actionsは、上流が提供するFreeCAD Web 1.0.8のDockerイメージから実行エンジンを抽出し、[https://kana874.github.io/3DCAD/](https://kana874.github.io/3DCAD/) に静的サイトとして配置する構成です。
