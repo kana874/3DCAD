@@ -10,6 +10,7 @@ import sys
 
 _REQUEST = "__FUSION_DESIGN_REQUEST__"
 _REQUEST_ID = __FUSION_DESIGN_ID__
+_VALUE = __FUSION_DESIGN_VALUE__
 _OUTPUT = "/tmp/fusion-design-response.json"
 
 # Prefer Part Design's sketch creation because it auto-creates a Body if needed.
@@ -33,6 +34,8 @@ COMMANDS = {
     "chamfer": ("PartDesign_Chamfer",),
     "mirror": ("PartDesign_Mirrored",),
     "linear_pattern": ("PartDesign_LinearPattern",),
+    "grid": (), "tree": (), "expand_tree": (), "collapse_tree": (),
+    "length": (), "sketch_dimension": (), "fusion_gui": (),
 }
 SKETCH_ONLY = frozenset(("line", "rectangle", "circle", "arc", "dimension",
                          "trim", "construction", "leave_sketch"))
@@ -83,13 +86,160 @@ def current_state(app, gui):
     # Gui.activeDocument().resetEdit() is the supported fallback when the
     # dedicated Sketcher_LeaveSketch command is not registered in this build.
     available["leave_sketch"] = bool(in_edit)
+    for name in ("tree", "expand_tree", "collapse_tree", "fusion_gui"):
+        available[name] = True
+    available["grid"] = bool(in_edit)
+    available["length"] = bool(document and selected)
+    available["sketch_dimension"] = bool(in_edit)
     return {
         "document": bool(document),
         "hasBody": has_body,
         "sketchEdit": in_edit,
         "selectionCount": selected,
+        "gridShown": bool(getattr(getattr(sketch_in_edit(gui), "ViewObject", None), "ShowGrid", False)),
+        "activeSketch": getattr(sketch_in_edit(gui), "Name", None),
         "available": available,
     }
+
+
+
+def selection(gui):
+    try:
+        return list(gui.Selection.getSelectionEx())
+    except Exception:
+        return []
+
+
+def sketch_in_edit(gui):
+    try:
+        edit = gui.activeDocument().getInEdit()
+        if isinstance(edit, (tuple, list)):
+            edit = edit[0] if edit else None
+        if isinstance(edit, str):
+            import FreeCAD
+            edit = FreeCAD.ActiveDocument.getObject(edit)
+        return edit if getattr(edit, "TypeId", "") == "Sketcher::SketchObject" else None
+    except Exception:
+        return None
+
+
+def target_for_sketch(app, gui):
+    doc = app.ActiveDocument
+    bodies = list(doc.findObjects("PartDesign::Body"))
+    parts = selection(gui)
+    item = parts[0] if len(parts) == 1 else None
+    obj = getattr(item, "Object", None)
+    names = list(getattr(item, "SubElementNames", ()))
+    face = names[0] if len(names) == 1 and names[0].startswith("Face") else None
+    body = None
+    for candidate in bodies:
+        try:
+            if obj is not None and (obj == candidate or obj == candidate.Tip or obj in candidate.Group or candidate in obj.InListRecursive):
+                body = candidate
+                break
+        except Exception:
+            if obj == candidate:
+                body = candidate
+                break
+    if face:
+        if body is None:
+            return "選択した面のBodyを特定できません。"
+        try:
+            import Part
+            if not isinstance(obj.Shape.getElement(face).Surface, Part.Plane):
+                return "曲面には直接スケッチを作成できません。平面を選択してください。"
+        except Exception:
+            return "面の平面判定に失敗しました。"
+    if body is None:
+        try:
+            active = gui.activeDocument().activeView().getActiveObject("pdbody")
+            if active in bodies:
+                body = active
+        except Exception:
+            pass
+    if body is None:
+        if len(bodies) == 1:
+            body = bodies[0]
+        elif len(bodies) > 1:
+            return "複数Bodyがあります。対象の面またはBodyを選択してください。"
+    if body is None:
+        gui.Selection.clearSelection()
+        gui.runCommand("PartDesign_Body")
+        bodies = list(doc.findObjects("PartDesign::Body"))
+        if not bodies:
+            return "Bodyを作成できませんでした。"
+        body = bodies[-1]
+    gui.activeDocument().activeView().setActiveObject("pdbody", body)
+    if not face:
+        gui.Selection.clearSelection()
+    return None
+
+
+def native_dock(gui):
+    from PySide6 import QtWidgets
+    mw = gui.getMainWindow()
+    return next((w for w in mw.findChildren(QtWidgets.QDockWidget)
+                 if w.objectName() in ("Model", "Combo View", "Tree view")), None)
+
+
+def native_ui(gui):
+    from PySide6 import QtWidgets
+    mw = gui.getMainWindow()
+    mw.menuBar().hide()
+    for bar in mw.findChildren(QtWidgets.QToolBar):
+        bar.hide()
+
+
+def apply_length(app, gui, value):
+    if not 0.01 <= value <= 100000:
+        return {"ok": False, "message": "0.01〜100000 mmの正数を入力してください。"}
+    picked = selection(gui)
+    if len(picked) != 1 or getattr(picked[0], "SubElementNames", ()):
+        return {"ok": False, "message": "モデルツリーでPadまたはPocketを1つ選んでください。"}
+    obj = picked[0].Object
+    if getattr(obj, "TypeId", "") not in ("PartDesign::Pad", "PartDesign::Pocket"):
+        return {"ok": False, "message": "対象はPad（押し出し）またはPocket（切り取り）です。"}
+    doc = app.ActiveDocument
+    doc.openTransaction("Fusion距離入力")
+    try:
+        obj.Length = float(value)
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception:
+        doc.abortTransaction()
+        raise
+    return {"ok": True, "message": f"{obj.Label}の距離を{value:g} mmにしました。"}
+
+
+def apply_sketch_dimension(app, gui, value):
+    if not 0.01 <= value <= 100000:
+        return {"ok": False, "message": "0.01〜100000 mmの正数を入力してください。"}
+    sketch = sketch_in_edit(gui)
+    picked = selection(gui)
+    if sketch is None or len(picked) != 1 or picked[0].Object != sketch:
+        return {"ok": False, "message": "スケッチ編集で線分を1本選択してください。"}
+    names = list(getattr(picked[0], "SubElementNames", ()))
+    if len(names) != 1 or not names[0].startswith("Edge"):
+        return {"ok": False, "message": "線分を1本選択してください。"}
+    try:
+        index = int(names[0][4:]) - 1
+        import Part
+        import Sketcher
+        if not isinstance(sketch.Geometry[index], Part.LineSegment):
+            return {"ok": False, "message": "現状は直線の長さに対応します。"}
+        constraint = Sketcher.Constraint("Distance", index, 1, index, 2, value)
+    except Exception:
+        return {"ok": False, "message": "選択線分を認識できません。"}
+    doc = app.ActiveDocument
+    doc.openTransaction("Fusionスケッチ寸法")
+    try:
+        sketch.addConstraint(constraint)
+        doc.recompute()
+        doc.commitTransaction()
+    except Exception:
+        doc.abortTransaction()
+        raise
+    return {"ok": True, "message": f"直線に{value:g} mmの寸法拘束を設定しました。"}
 
 
 def execute(app, gui, action):
@@ -98,6 +248,33 @@ def execute(app, gui, action):
     if action not in COMMANDS:
         return {"ok": False, "message": "未対応の操作です。"}
     state = current_state(app, gui)
+    if action == "fusion_gui":
+        native_ui(gui)
+        return {"ok": True, "message": "Fusion型の上部操作領域を使用します。"}
+    if action in ("tree", "expand_tree", "collapse_tree"):
+        dock = native_dock(gui)
+        if dock is None:
+            return {"ok": False, "message": "モデルツリーを取得できません。"}
+        if action == "tree":
+            dock.setVisible(not dock.isVisible())
+        else:
+            from PySide6 import QtWidgets
+            for tree in dock.findChildren(QtWidgets.QTreeView):
+                (tree.expandAll if action == "expand_tree" else tree.collapseAll)()
+        return {"ok": True, "message": "モデルツリーの表示を変更しました。"}
+    if action == "grid":
+        sketch = sketch_in_edit(gui)
+        if sketch is None:
+            return {"ok": False, "message": "スケッチ編集時にグリッドを切り替えられます。"}
+        view = sketch.ViewObject
+        view.ShowGrid = not bool(view.ShowGrid)
+        if view.ShowGrid and hasattr(view, "GridAuto"):
+            view.GridAuto = True
+        return {"ok": True, "message": "グリッド表示を切り替えました。"}
+    if action == "length":
+        return apply_length(app, gui, float(_VALUE))
+    if action == "sketch_dimension":
+        return apply_sketch_dimension(app, gui, float(_VALUE))
     if action != "new" and not state["document"]:
         return {"ok": False, "message": "先に「新規設計」でドキュメントを作成してください。"}
     if action in SKETCH_ONLY and not state["sketchEdit"]:
@@ -108,6 +285,16 @@ def execute(app, gui, action):
         return {"ok": False, "message": "モデルツリーでスケッチ、面、またはフィーチャを選択してください。"}
     if action == "sketch" and state["sketchEdit"]:
         return {"ok": False, "message": "スケッチ編集中です。いったん終了してください。"}
+    if action == "sketch":
+        reason = target_for_sketch(app, gui)
+        if reason:
+            return {"ok": False, "message": reason}
+        gui.runCommand("PartDesign_NewSketch")
+        return {"ok": True, "command": "PartDesign_NewSketch",
+                "message": "既存面または基準平面でスケッチを開始してください。"}
+    if action == "body":
+        # Prevent PartDesign from using a selected Pad/Body as a BaseFeature.
+        gui.Selection.clearSelection()
     if action == "leave_sketch":
         # FreeCAD's task panel may expose Sketcher_LeaveSketch; native
         # resetEdit is the documented fallback for edited sketch objects.

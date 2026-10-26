@@ -3,7 +3,7 @@
 (() => {
   'use strict';
   const query=new URLSearchParams(location.search);
-  if(query.get('fusionMode')==='off'||query.get('designPalette')==='off') return;
+  if(query.get('fusionMode')==='off'||query.get('designPalette')==='off'||query.get('fusionUI')==='classic') return;
   const groups=[['start','準備'],['sketch','スケッチ'],['solid','ソリッド'],['modify','修正']];
   const items=[
     ['new','新規設計','start','新規ドキュメント','+'],
@@ -26,10 +26,11 @@
     ['mirror','ミラー','modify','フィーチャを対称化','◧'],
     ['linear_pattern','矩形状パターン','modify','フィーチャの繰り返し','▦']
   ];
-  const allow=new Set(['state',...items.map(x=>x[0])]);
+  const allow=new Set(['state','fusion_gui','grid','tree','expand_tree','collapse_tree','length','sketch_dimension',...items.map(x=>x[0])]);
   const out='/tmp/fusion-design-response.json';
   let source=null,state=null,pending=false,ready=false,seq=0,group='start';
-  let root,tabs,actions,stage,message;
+  let root,tabs,actions,stage,message,lengthField,lengthButton,gridButton;
+  let nativeHidden=false, lastGridSketch=null;
   fetch('./fusion/design-commands.py',{cache:'force-cache'})
     .then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.text();})
     .then(s=>{source=s;})
@@ -43,8 +44,8 @@
   }
   function hint(s){
     if(!s?.document)return '① 新規設計 → ② スケッチ開始（ボディ自動作成） → ③ 平面選択';
-    if(s.sketchEdit)return 'スケッチ編集中：形状と寸法を作り、「スケッチ終了」。';
-    if(s.selectionCount)return '対象を選択中：押し出し・切り取り・修正が使えます。';
+    if(s.sketchEdit)return 'スケッチ：グリッドと寸法拘束を利用できます。';
+    if(s.selectionCount)return '対象を選択中：面からスケッチ、押し出し、修正を選べます。';
     return '新規スケッチを作成するか、モデルツリーで対象を選択してください。';
   }
   function enabled(c){
@@ -74,26 +75,22 @@
       b.append(icon,label);b.addEventListener('click',()=>begin(c[0]));actions.appendChild(b);
     }
     stage.textContent=ready?hint(state):'FreeCADの起動を確認中…';
-  }
-  function begin(action){
-    // For a new design, Fusion users should be able to start sketching without
-    // knowing about FreeCAD's mandatory Part Design Body container.
-    if(action==='sketch'&&state?.document&&!state.hasBody){
-      inform('ボディを自動作成してからスケッチを開きます。');
-      send('body',result=>{
-        if(!result.ok){
-          inform('ボディを作成できません。ツリーを確認してください。',true);
-          return;
-        }
-        setTimeout(()=>{
-          if(!pending&&canRun())send('sketch');
-          else inform('ボディを作成しました。もう一度「スケッチ開始」を押してください。');
-        },850);
-      });
-      return;
+    if(lengthField){
+      lengthField.disabled=pending||!ready;
+      lengthField.placeholder=state?.sketchEdit?'線分長さ（mm）':'距離（mm）';
     }
-    send(action);
+    if(lengthButton){
+      lengthButton.disabled=pending||!ready;
+      lengthButton.textContent=state?.sketchEdit?'寸法を拘束':'距離を適用';
+    }
+    if(gridButton){
+      gridButton.disabled=pending||!ready||!state?.sketchEdit;
+      gridButton.textContent=state?.gridShown?'グリッド：ON':'グリッド：OFF';
+    }
   }
+  // Body and selected-face ownership are resolved by the native Python broker,
+  // so there is never an extra Body added to an existing Pad by the browser UI.
+  function begin(action){send(action);}
   function send(action,done){
 
     if(pending||!allow.has(action)||!source||!canRun()){
@@ -107,8 +104,9 @@
       const fs=window.fcInstance.FS;
       try{fs.unlink(out);}catch(_){}
       const py=source.replace('"__FUSION_DESIGN_REQUEST__"',JSON.stringify(action))
-        .replace('__FUSION_DESIGN_ID__',String(id));
-      if(py===source||py.includes('__FUSION_DESIGN_ID__')||
+        .replace('__FUSION_DESIGN_ID__',String(id))
+        .replace('__FUSION_DESIGN_VALUE__',String(action==='length'||action==='sketch_dimension'?Number(lengthField?.value):0));
+      if(py===source||py.includes('__FUSION_DESIGN_ID__')||py.includes('__FUSION_DESIGN_VALUE__')||
         py.includes('"__FUSION_DESIGN_REQUEST__"'))throw Error('コマンドテンプレートが一致しません');
       window.__fcRunPyGuarded(py);
       let tries=0;
@@ -127,6 +125,17 @@
           if(action!=='state'||!result.ok)inform(result.message||'実行を確認しました。',!result.ok);
           if(result.error)console.warn('[fusion-design]',result.error);
           if(action!=='state')console.info('[fusion-design]',action,result.command||'',result.message);
+          if(action==='state'&&!nativeHidden&&result.ok){
+            nativeHidden=true;
+            document.documentElement.classList.add('fusion-integrated');
+            setTimeout(()=>{if(canRun())send('fusion_gui');},350);
+          }
+          if(action==='state'&&state?.sketchEdit&&state?.activeSketch){
+            if(lastGridSketch!==state.activeSketch){
+              lastGridSketch=state.activeSketch;
+              if(!state.gridShown)setTimeout(()=>{if(canRun()&&!pending)send('grid');},950);
+            }
+          }
           if(done)done(result);
         }else if(++tries>100){
           clearInterval(timer);pending=false;render();
@@ -137,28 +146,57 @@
   }
   function create(){
     if(document.getElementById('fusion-design-palette'))return;
-    const stylesheet=document.createElement('link');stylesheet.rel='stylesheet';
-    stylesheet.href='./fusion/design-palette.css';document.head.appendChild(stylesheet);
-    root=document.createElement('section');root.id='fusion-design-palette';
-    root.dataset.collapsed='false';root.setAttribute('aria-label','Fusion風のスケッチと3Dモデリング');
-    const shell=document.createElement('div');shell.className='fd-shell';
-    const head=document.createElement('header'),title=document.createElement('strong');
-    title.textContent='デザイン｜Fusion操作';
-    const sub=document.createElement('span');sub.className='fd-subtitle';sub.textContent='作成・修正';
-    const collapse=document.createElement('button');collapse.type='button';
-    collapse.className='fd-collapse';collapse.textContent='最小化';
-    collapse.addEventListener('click',()=>{
-      root.dataset.collapsed=String(root.dataset.collapsed!=='true');
-      collapse.textContent=root.dataset.collapsed==='true'?'開く':'最小化';
+    const sheet=document.createElement('link');
+    sheet.rel='stylesheet';sheet.href='./fusion/design-palette.css';
+    document.head.appendChild(sheet);
+    root=document.createElement('section');
+    root.id='fusion-design-palette';
+    root.setAttribute('aria-label','Fusion操作の統合ツールバー');
+    const header=document.createElement('header');
+    const brand=document.createElement('strong');brand.textContent='デザイン';
+    tabs=document.createElement('nav');tabs.className='fd-tabs';
+    tabs.setAttribute('aria-label','モデリング作業環境');
+    const secondary=document.createElement('div');secondary.className='fd-header-tools';
+    function utility(label,action){
+      const button=document.createElement('button');button.type='button';
+      button.textContent=label;button.addEventListener('click',()=>send(action));
+      secondary.appendChild(button);return button;
+    }
+    utility('モデルツリー ⮜⮞','tree');
+    utility('展開','expand_tree');
+    utility('格納','collapse_tree');
+    gridButton=utility('グリッド：OFF','grid');
+    const classic=document.createElement('a');
+    classic.textContent='標準GUIへ戻す';
+    const classicUrl=new URL(location.href);classicUrl.searchParams.set('fusionUI','classic');
+    classic.href=classicUrl.toString();
+    classic.addEventListener('click',e=>{
+      if(!confirm('再読み込みします。編集中のモデルは保存しましたか？'))e.preventDefault();
     });
-    head.append(title,sub,collapse);
+    secondary.appendChild(classic);
+    header.append(brand,tabs,secondary);
     const body=document.createElement('div');body.className='fd-body';
-    tabs=document.createElement('nav');tabs.className='fd-tabs';tabs.setAttribute('aria-label','モデリング機能');
     actions=document.createElement('div');actions.className='fd-actions';
+    const dimensions=document.createElement('div');dimensions.className='fd-dimensions';
+    const label=document.createElement('label');label.textContent='数値入力 mm';
+    lengthField=document.createElement('input');lengthField.type='number';lengthField.step='any';
+    lengthField.min='0.01';lengthField.max='100000';lengthField.value='10';
+    lengthField.setAttribute('aria-label','距離（mm）');
+    label.appendChild(lengthField);
+    lengthButton=document.createElement('button');lengthButton.type='button';
+    lengthButton.textContent='距離を適用';
+    lengthButton.addEventListener('click',()=>{
+      const v=Number(lengthField.value);
+      if(!Number.isFinite(v)||v<0.01||v>100000){inform('0.01〜100000 mmを入力してください。',true);return;}
+      send(state?.sketchEdit?'sketch_dimension':'length');
+    });
+    dimensions.append(label,lengthButton);
     stage=document.createElement('div');stage.className='fd-stage';
-    message=document.createElement('div');message.className='fd-message';message.setAttribute('role','status');
-    body.append(tabs,actions,stage,message);shell.append(head,body);root.appendChild(shell);
-    document.body.appendChild(root);render();
+    message=document.createElement('div');message.className='fd-message';
+    message.setAttribute('role','status');
+    body.append(actions,dimensions);
+    root.append(header,body,stage,message);document.body.appendChild(root);
+    render();
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',create,{once:true});
   else create();
@@ -167,6 +205,6 @@
     clearInterval(start);ready=true;send('state');
   },500);
   setInterval(()=>{
-    if(ready&&!pending&&canRun()&&root?.dataset.collapsed!=='true')send('state');
+    if(ready&&!pending&&canRun())send('state');
   },5500);
 })();

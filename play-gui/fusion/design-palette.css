@@ -1,24 +1,40 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later */
-#fusion-design-palette{position:fixed;z-index:2000000;top:148px;left:278px;width:min(575px,calc(100vw - 305px));font:12px/1.45 Arial,"Noto Sans JP",sans-serif;color:#273447;pointer-events:none}
+/* Qt canvas resizes below the integrated Fusion ribbon; never float over 3D. */
+html.fusion-integrated #screen{top:92px!important;}
+#fusion-design-palette{position:fixed;inset:0 0 auto 0;z-index:2000000;height:92px;
+font:12px/1.4 Arial,"Noto Sans JP",sans-serif;background:#f1f4f8;color:#223348;
+box-sizing:border-box;box-shadow:0 1px 5px #101e3738;border-bottom:1px solid #bec9d7;overflow:hidden}
 #fusion-design-palette *{box-sizing:border-box}
-#fusion-design-palette .fd-shell{pointer-events:auto;border:1px solid #bdc9d7;border-radius:9px;background:rgba(251,252,254,.97);box-shadow:0 3px 13px #1113;overflow:hidden}
-#fusion-design-palette header{display:flex;align-items:center;gap:8px;padding:5px 9px;background:#e6ecf5;border-bottom:1px solid #cdd5dd}
-#fusion-design-palette header strong{font-size:13px;white-space:nowrap}
-#fusion-design-palette .fd-subtitle{color:#566274}
-#fusion-design-palette button{font:inherit;color:inherit;cursor:pointer}
-#fusion-design-palette button:disabled{opacity:.38;cursor:not-allowed}
-#fusion-design-palette .fd-collapse{margin-left:auto;border:1px solid #aebac9;background:#fff;padding:2px 9px;border-radius:5px}
-#fusion-design-palette .fd-body{padding:6px 8px}
-#fusion-design-palette .fd-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
-#fusion-design-palette .fd-tabs button{border:0;padding:4px 11px;border-radius:5px;background:#edf0f3}
-#fusion-design-palette .fd-tabs button[data-active="true"]{background:#2176c6;color:#fff;font-weight:bold}
-#fusion-design-palette .fd-actions{display:flex;flex-wrap:wrap;gap:5px}
-#fusion-design-palette .fd-action{display:flex;align-items:center;gap:5px;padding:5px 9px;border-radius:6px;border:1px solid #b6c4d4;background:#fff;min-height:32px}
-#fusion-design-palette .fd-action:not(:disabled):hover{background:#dcecff;border-color:#4e87c3}
-#fusion-design-palette .fd-icon{font-size:15px;color:#2472aa}
-#fusion-design-palette .fd-stage{color:#5a6674;margin-top:7px;font-size:11px}
-#fusion-design-palette .fd-message{margin-top:3px;color:#146343;font-size:11px}
-#fusion-design-palette .fd-message[data-error="true"]{color:#a02c2c}
-#fusion-design-palette[data-collapsed="true"]{width:max-content;max-width:calc(100vw - 20px)}
-#fusion-design-palette[data-collapsed="true"] .fd-body{display:none}
-@media(max-width:730px){#fusion-design-palette{top:138px;left:7px;width:calc(100vw - 14px)}}
+#fusion-design-palette header{height:38px;display:flex;gap:12px;align-items:center;padding:4px 13px;
+background:#e3e9f2;border-bottom:1px solid #d2dbe4}
+#fusion-design-palette header strong{font-size:14px;white-space:nowrap}
+#fusion-design-palette .fd-tabs{display:flex;gap:4px;align-items:center}
+#fusion-design-palette button{font:inherit;cursor:pointer;color:inherit}
+#fusion-design-palette button:disabled{opacity:.37;cursor:not-allowed}
+#fusion-design-palette .fd-tabs button{border:0;background:transparent;border-radius:4px;padding:5px 14px}
+#fusion-design-palette .fd-tabs button[data-active="true"]{background:#2569ad;color:#fff;font-weight:600}
+#fusion-design-palette .fd-header-tools{display:flex;margin-left:auto;gap:6px;align-items:center}
+#fusion-design-palette .fd-header-tools button{border:1px solid #b9c7d5;background:#fff;padding:3px 8px;border-radius:5px;white-space:nowrap}
+#fusion-design-palette .fd-header-tools a{padding:3px 4px;color:#1d609f;white-space:nowrap;text-decoration:none}
+#fusion-design-palette .fd-body{display:flex;align-items:center;gap:12px;padding:5px 10px;height:34px}
+#fusion-design-palette .fd-actions{display:flex;gap:5px;align-items:center;overflow:auto hidden;flex:1;min-width:0}
+#fusion-design-palette .fd-action{display:flex;align-items:center;gap:5px;border:1px solid #b7c5d5;
+padding:3px 8px;background:white;border-radius:5px;white-space:nowrap;height:25px}
+#fusion-design-palette .fd-action:not(:disabled):hover{background:#dcecff;border-color:#477fb8}
+#fusion-design-palette .fd-icon{color:#24659d;font-size:15px}
+#fusion-design-palette .fd-dimensions{display:flex;gap:5px;align-items:center;white-space:nowrap}
+#fusion-design-palette .fd-dimensions label{display:flex;gap:6px;align-items:center}
+#fusion-design-palette .fd-dimensions input{width:83px;font:inherit;padding:3px 5px;
+border:1px solid #aab8c8;border-radius:4px}
+#fusion-design-palette .fd-dimensions button{border:1px solid #2070b4;background:#2777b6;color:#fff;
+padding:3px 7px;border-radius:4px}
+#fusion-design-palette .fd-stage{display:inline-block;margin:0 8px 0 13px;font-size:10px;color:#627284}
+#fusion-design-palette .fd-message{display:inline-block;font-size:10px;color:#187147}
+#fusion-design-palette .fd-message[data-error="true"]{color:#b53737}
+@media(max-width:800px){
+html.fusion-integrated #screen{top:126px!important}
+#fusion-design-palette{height:126px}
+#fusion-design-palette header{flex-wrap:wrap;height:auto;min-height:58px}
+#fusion-design-palette .fd-header-tools{margin-left:0}
+#fusion-design-palette .fd-body{height:47px}
+}
