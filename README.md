@@ -4,7 +4,26 @@
 
 > **現状: Dockerビルド・静的配信テスト成功、ブラウザの日本語描画は未検証。** 日本語表示を保証する完成ビルドではありません。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
 
-## 実行方法
+## GitHub Pages（インストール不要のブラウザ版）
+
+本リポジトリのPages用GitHub Actionsは、上流が提供するFreeCAD Web 1.0.8のDockerイメージから実行エンジンを抽出し、[https://kana874.github.io/3DCAD/](https://kana874.github.io/3DCAD/) に静的サイトとして配置する構成です。
+
+**Pages設定**：リポジトリの Settings → Pages → Build and deployment → Source を **GitHub Actions** にします。初回の公開は、mainブランチへの変更後に Actions → FreeCAD Japanese GitHub Pages で成功したか確認してください。Pagesを有効にしただけでSourceが「Deploy from a branch」の場合、ワークフローは公開先を更新できません。
+
+GitHub Pagesの仕様上、サーバーから任意のHTTPヘッダーを送れません。初回はService Workerを登録して自動リロードし、COOP/COEPを付与してからFreeCAD本体の起動に進みます。WASMとdataはPagesでContent-Encodingを指定できないため、gzipファイルのまま配信し、EdgeのDecompressionStreamで展開します。日本語の翻訳（QM）は日本語のみ配布します。
+
+**制限と注意事項**：
+
+- **実ブラウザでの3D CAD動作・日本語表示は未検証**です。CIのビルド成功は実操作成功の証拠ではありません。
+- 先にService Workerが動く必要があるため、初回アクセスで自動リロードすることがあります。サードパーティーCookieやService Workerを禁止する社内ポリシーでは動作しない可能性があります。
+- Pagesは静的サイトのため**共有セッション、Server Files、MCPサーバー、リバースプロキシを必要とするAddon Manager機能は提供されません**。メニュー項目が残っていても使用しないでください。
+- ファイルはブラウザ内へ保存されるため、FCStdやSTEPは明示的にローカルへダウンロードしてバックアップしてください。GitHub Pages自体にはサーバー保存されません。
+- 初回は大容量のWASM/データを取得し、展開後のメモリも使用します。8GB RAM環境で快適に動く保証はありません。
+- Pagesのプロジェクトサブパス「/3DCAD/」用です。独自ドメインやリポジトリ名を変更する場合は scripts/build_pages.py の変換とテストを変更してください。
+
+Pages用のビルドは .github/workflows/pages.yml で行い、Git履歴には数百MBの実行バイナリを入れません。公開用の圧縮ファイルはActions実行時に生成されます。
+
+## Dockerでの実行方法
 
 Windows 11 + Docker Desktop（会社の情報システム部門が許可した場合）:
 

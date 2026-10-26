@@ -1,0 +1,96 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
+name: FreeCAD Japanese GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/pages.yml
+      - Dockerfile.ja
+      - .dockerignore
+      - play-gui/ja/**
+      - scripts/build_pages.py
+      - scripts/localize_freecad.py
+      - pages/**
+      - tests/test_pages.py
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Check Pages conversion logic
+        run: python3 -m unittest discover -s tests -p 'test_pages.py' -v
+      - name: Build Japanese FreeCAD image
+        run: docker build --progress=plain -f Dockerfile.ja -t freecad-web-ja:pages .
+      - name: Extract static distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cid=$(docker create freecad-web-ja:pages)
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid":/usr/share/nginx/html/. _site/
+          cp pages/sw.js pages/coi-boot.js _site/
+          python3 scripts/build_pages.py _site --base /3DCAD/ --version 1.0.8-ja1
+      - name: Assert Pages-ready static assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s _site/index.html
+          test -s _site/FreeCAD.js
+          test -s _site/FreeCAD.wasm.gz
+          test -s _site/FreeCAD.data.gz
+          test -s _site/ja/NotoSansJP-VF.ttf
+          test -s _site/i18n/index.json
+          grep -q "coi-boot.js" _site/index.html
+          grep -q "FreeCAD.wasm.gz?v=" _site/index.html
+          grep -q "__fcPagesUnGzip" _site/index.html
+          grep -q '"start_url": "./"' _site/manifest.webmanifest
+          python3 - <<'PY'
+          from pathlib import Path
+          import gzip,json
+          site=Path('_site')
+          with gzip.open(site/'FreeCAD.wasm.gz','rb') as f:
+              assert f.read(4)==b'\x00asm'
+          with gzip.open(site/'FreeCAD.data.gz','rb') as f:
+              assert len(f.read(4096))==4096
+          manifest=json.loads((site/'i18n/index.json').read_text())
+          assert manifest['files'] and all(x.endswith('_ja.qm') for x in manifest['files'])
+          assert all((site/'i18n'/x).exists() for x in manifest['files'])
+          assert all(p.stat().st_size<100*1024*1024 for p in site.rglob('*') if p.is_file()), "Pages file over 100MiB"
+          assert sum(p.stat().st_size for p in site.rglob('*') if p.is_file())<1024**3
+          print((site/'build-report.json').read_text())
+          PY
+      - name: Upload Pages deployment artifact
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
