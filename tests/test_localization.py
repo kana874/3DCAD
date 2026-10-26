@@ -10,7 +10,7 @@ spec.loader.exec_module(module)
 
 BASE = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<title>FreeCAD in your browser - the full CAD app compiled to WebAssembly</title>'
-        '</head><body><script> const cfg = {\\n       qt: {\\n         onLoaded:()=>{}'
+        '</head><body><script> const cfg = {\n       qt: {\n         onLoaded:()=>{}'
         '};</script></body></html>')
 
 class JapaneseLocalizationTests(unittest.TestCase):
