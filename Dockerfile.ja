@@ -27,6 +27,7 @@ FROM base
 COPY --from=japanese /stage/play-gui/freecad-gui.html /usr/share/nginx/html/freecad-gui.html
 COPY --from=japanese /stage/play-gui/manifest.webmanifest /usr/share/nginx/html/manifest.webmanifest
 COPY play-gui/ja/fonts.json play-gui/ja/fonts-static.json play-gui/ja/freecad-ja.js /usr/share/nginx/html/ja/
+COPY play-gui/fusion/fusion-mode.js play-gui/fusion/fusion-mode.py /usr/share/nginx/html/fusion/
 COPY --from=japanese /stage/ja/NotoSansJP-VF.ttf /usr/share/nginx/html/ja/NotoSansJP-VF.ttf
 COPY --from=japanese /stage/ja/NotoSansJP-Static.ttf /usr/share/nginx/html/ja/NotoSansJP-Static.ttf
 COPY --from=japanese /stage/ja/OFL.txt /usr/share/nginx/html/ja/OFL.txt
