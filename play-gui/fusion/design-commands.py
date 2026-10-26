@@ -69,6 +69,15 @@ def current_state(app, gui):
         selected = len(gui.Selection.getSelectionEx()) if document else 0
     except Exception:
         selected = 0
+    try:
+        body_objects = document.findObjects("PartDesign::Body") if document else []
+        has_body = bool(body_objects)
+    except Exception:
+        # Older builds may not support findObjects for Body. Inspect objects
+        # without modifying the project and report whether one already exists.
+        has_body = bool(document and any(
+            getattr(obj, "TypeId", "") == "PartDesign::Body"
+            for obj in getattr(document, "Objects", [])))
     available = {action: bool(command_name(gui, action))
                  for action in COMMANDS}
     # Gui.activeDocument().resetEdit() is the supported fallback when the
@@ -76,6 +85,7 @@ def current_state(app, gui):
     available["leave_sketch"] = bool(in_edit)
     return {
         "document": bool(document),
+        "hasBody": has_body,
         "sketchEdit": in_edit,
         "selectionCount": selected,
         "available": available,
