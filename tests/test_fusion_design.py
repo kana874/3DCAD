@@ -73,6 +73,14 @@ class FusionDesignTests(unittest.TestCase):
         f.editor=True
         self.assertFalse(f.run('pocket')['ok'])
         self.assertEqual(f.actions,['PartDesign_Pad'])
+    def test_body_presence_is_reported(self):
+        f=FreeCADMocks()
+        f.app.ActiveDocument=types.SimpleNamespace(
+            findObjects=lambda type_id:[object()] if type_id=='PartDesign::Body' else [])
+        self.assertTrue(f.run('state')['state']['hasBody'])
+        f.app.ActiveDocument=types.SimpleNamespace(findObjects=lambda type_id:[])
+        self.assertFalse(f.run('state')['state']['hasBody'])
+
     def test_unknown_action_fails_closed(self):
         f=FreeCADMocks()
         self.assertFalse(f.run("__import__('os').system('echo unsafe')")['ok'])
@@ -86,6 +94,11 @@ class FusionDesignTests(unittest.TestCase):
         self.assertIn('fusionMode',js)
         self.assertNotIn('dispatchEvent(new MouseEvent(',js)
         self.assertIn('design-palette.css',js)
+        self.assertIn("if(action==='sketch'&&state?.document&&!state.hasBody)",js)
+        self.assertIn("send('body',result=>",js)
+        self.assertIn("setTimeout(()=>",js)
+        self.assertIn("send('sketch')",js)
+
 
 if __name__=='__main__':
     unittest.main()
