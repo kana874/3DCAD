@@ -91,6 +91,8 @@ def current_state(app, gui):
     available["grid"] = bool(in_edit)
     available["length"] = bool(document and selected)
     available["sketch_dimension"] = bool(in_edit)
+    available["pad_exact"] = bool(document and selected)
+    available["pocket_exact"] = bool(document and selected)
     return {
         "document": bool(document),
         "hasBody": has_body,
@@ -211,6 +213,47 @@ def apply_length(app, gui, value):
     return {"ok": True, "message": f"{obj.Label}の距離を{value:g} mmにしました。"}
 
 
+
+def create_extrusion(app, gui, operation, value):
+    """Create a proper parametric feature in the sketch's existing Body."""
+    if not 0.01 <= value <= 100000:
+        return {"ok": False, "message": "距離は0.01〜100000 mmの範囲で入力してください。"}
+    picked = selection(gui)
+    if len(picked) != 1 or getattr(picked[0], "SubElementNames", ()):
+        return {"ok": False, "message": "モデルツリーで閉じたプロファイルのスケッチを1つ選択してください。"}
+    sketch = picked[0].Object
+    if getattr(sketch, "TypeId", "") != "Sketcher::SketchObject":
+        return {"ok": False, "message": "Pad/Pocketの作成にはスケッチを選択してください。"}
+    doc = app.ActiveDocument
+    bodies = list(doc.findObjects("PartDesign::Body"))
+    body = next((b for b in bodies if sketch in getattr(b, "Group", ())), None)
+    if body is None:
+        return {"ok": False, "message": "スケッチはPartDesign Bodyの中に配置してください。"}
+    if operation == "Pocket" and getattr(body, "Tip", None) is None:
+        return {"ok": False, "message": "切り取りには既存のソリッドが必要です。"}
+    doc.openTransaction("Fusion 数値" + operation)
+    try:
+        kind = "PartDesign::Pad" if operation == "Pad" else "PartDesign::Pocket"
+        feature = body.newObject(kind, operation)
+        feature.Profile = sketch
+        feature.Length = value
+        doc.recompute()
+        shape = feature.Shape
+        if shape.isNull() or not shape.isValid() or len(shape.Solids) != 1:
+            raise ValueError("閉じたスケッチやBodyの結合状態を確認してください。")
+        doc.commitTransaction()
+    except Exception:
+        doc.abortTransaction()
+        raise
+    try:
+        gui.Selection.clearSelection()
+        gui.activeDocument().activeView().viewAxonometric()
+        gui.activeDocument().activeView().fitAll()
+    except Exception:
+        pass
+    return {"ok": True, "message": f"{operation}を{value:g} mmで作成しました。", "command": kind}
+
+
 def apply_sketch_dimension(app, gui, value):
     if not 0.01 <= value <= 100000:
         return {"ok": False, "message": "0.01〜100000 mmの正数を入力してください。"}
@@ -271,6 +314,8 @@ def execute(app, gui, action):
         if view.ShowGrid and hasattr(view, "GridAuto"):
             view.GridAuto = True
         return {"ok": True, "message": "グリッド表示を切り替えました。"}
+    if action in ("pad_exact", "pocket_exact"):
+        return create_extrusion(app, gui, "Pad" if action == "pad_exact" else "Pocket", float(_VALUE))
     if action == "length":
         return apply_length(app, gui, float(_VALUE))
     if action == "sketch_dimension":
