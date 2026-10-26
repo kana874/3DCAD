@@ -27,6 +27,9 @@
 # play-gui: track the hand-authored front-end (served by the deploy container),
 # ignore the multi-hundred-MB build artifacts (shipped via GitHub Release instead).
 /play-gui/*
+!/play-gui/cad/
+/play-gui/cad/__pycache__/
+/cad-test-output/
 !/play-gui/freecad-gui.html
 # LGPL attribution page, served same-origin and linked from the boot screen
 !/play-gui/legal.html

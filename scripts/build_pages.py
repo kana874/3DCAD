@@ -33,6 +33,17 @@ def gzip_file(path):
     return target
 
 
+def validate_gzip(path):
+    """Read through the footer/CRC; opening the first 4 KiB misses truncation."""
+    size = 0
+    with gzip.open(path, 'rb') as stream:
+        while chunk := stream.read(4 * 1024 * 1024):
+            size += len(chunk)
+    if size == 0:
+        raise ValueError(f'Empty gzip asset: {path}')
+    return size
+
+
 def site(site_dir, base, version):
     if not base.startswith("/") or not base.endswith("/") or "//" in base:
         raise ValueError("Base path must look like /3DCAD/")
@@ -173,6 +184,8 @@ def site(site_dir, base, version):
             raise FileNotFoundError("FreeCAD.data.gz or FreeCAD.data")
         data_gz = gzip_file(raw)
     (site_dir / "FreeCAD.data").unlink(missing_ok=True)
+    validate_gzip(wasm_gz)
+    validate_gzip(data_gz)
     # Pages artifact is strictly files and directories.
     for path in site_dir.rglob("*"):
         if path.is_symlink():

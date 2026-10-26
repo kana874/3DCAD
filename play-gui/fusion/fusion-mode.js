@@ -3,6 +3,7 @@
 // DOM pointer events, so Sketcher and the WASM Qt event loop stay untouched.
 (() => {
   'use strict';
+  if(new URLSearchParams(location.search).get('workspace') === 'fusion') return;
   const qs = new URLSearchParams(location.search);
   const enabled = qs.get('fusionMode') !== 'off';
   const mark = '/tmp/freecad-fusion-mode-status.txt';

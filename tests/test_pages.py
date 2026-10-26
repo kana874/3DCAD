@@ -95,6 +95,12 @@ class PagesBuildTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             mod.site(self.site, "3DCAD", "test")
 
+    def test_truncated_runtime_is_rejected(self):
+        path = self.site / 'FreeCAD.data.gz'
+        path.write_bytes(gzip.compress(b'runtime' * 2000)[:-8])
+        with self.assertRaises(EOFError):
+            mod.validate_gzip(path)
+
     def test_upstream_anchor_mismatch_fails(self):
         (self.site/"freecad-gui.html").write_text(HTML.replace("const WASM_URL = 'FreeCAD.wasm';",""))
         with self.assertRaises(ValueError):
