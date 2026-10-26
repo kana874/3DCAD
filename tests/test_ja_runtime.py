@@ -20,6 +20,8 @@ class JapaneseLocaleActivation(unittest.TestCase):
         self.assertIn('QFontDatabase.addApplicationFontFromData',JS)
     def test_safe_mode_kept(self):
         self.assertIn("mode === 'off'",JS)
+        self.assertIn("requestedMode === 'off'",JS)
+        self.assertIn("'variable' : 'static'",JS)
         self.assertIn("fontMode",JS)
 
 if __name__ == '__main__':
