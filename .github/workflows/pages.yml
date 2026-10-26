@@ -16,6 +16,7 @@ on:
       - pages/**
       - tests/test_pages.py
       - tests/test_fusion_preset.py
+      - tests/test_fusion_design.py
       - tests/test_ja_runtime.py
       - tests/test_pages_sw.mjs
   pull_request:
@@ -41,8 +42,13 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_pages.py' -v
           python3 -m unittest discover -s tests -p 'test_ja_runtime.py' -v
           python3 -m unittest discover -s tests -p 'test_fusion_preset.py' -v
+          python3 -m unittest discover -s tests -p 'test_fusion_design.py' -v
       - name: Verify Service Worker fallback with a real gzip WASM stream
         run: node tests/test_pages_sw.mjs
+      - name: Check Fusion modeling palette JavaScript syntax
+        run: |
+          node --check play-gui/fusion/design-palette.js
+          python3 -m py_compile play-gui/fusion/design-commands.py
       - name: Build Japanese FreeCAD image
         run: docker build --progress=plain -f Dockerfile.ja -t freecad-web-ja:pages .
       - name: Extract static distribution
@@ -62,6 +68,10 @@ jobs:
           test -s _site/index.html
           test -s _site/fusion/fusion-mode.js
           test -s _site/fusion/fusion-mode.py
+          test -s _site/fusion/design-palette.js
+          test -s _site/fusion/design-palette.css
+          test -s _site/fusion/design-commands.py
+          grep -q '/fusion/design-palette.js' _site/index.html
           grep -q '/fusion/fusion-mode.js' _site/index.html
           test -s _site/sw.js
           grep -q 'FreeCAD.wasm.gz' _site/sw.js

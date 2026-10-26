@@ -4,6 +4,27 @@
 
 > **現状: GUIの日本語メニューと日本語フォント表示を外部ブラウザで確認済み。** 全ワークベンチとCAD操作の互換性・会社PCでの長時間利用は未検証です。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
 
+## Fusion風のスケッチ・3Dモデリング操作（2026-10-26）
+
+[公開3DCAD](https://kana874.github.io/3DCAD/) で日本語の浮動「デザイン｜Fusion操作」パネルを使用できます。画面の左上（モデルツリーの右側）にあり、最小化・展開できます。ブラウザのQtイベント処理は変更せず、クリックされた操作のみFreeCAD標準コマンドに渡します。
+
+| 区分 | ボタン | 実行するFreeCADコマンド |
+|---|---|---|
+| 準備 | 新規設計 / ボディ / スケッチ開始 | Std_New / PartDesign_Body / PartDesign_NewSketch |
+| スケッチ | 線 / 長方形 / 円 / 円弧 / 寸法 / トリム / 補助線 / スケッチ終了 | Sketcherの対応コマンド、終了時は編集解除 |
+| ソリッド | 押し出し / 切り取り / 回転 / 穴 | PartDesign_Pad / Pocket / Revolution / Hole |
+| 修正 | フィレット / 面取り / ミラー / 矩形状パターン | PartDesign_Fillet / Chamfer / Mirrored / LinearPattern |
+
+**Fusionに近い新規部品の作り方**：①「新規設計」→②「スケッチ開始」（ボディが無い場合はPartDesignが必要に応じて作成）→③FreeCADの選択画面でXY平面等を選択→④自動的にスケッチタブへ切替→⑤長方形または円を描く→⑥寸法を付与→⑦「スケッチ終了」→⑧モデルツリーから対象スケッチを選択→⑨「ソリッド」→「押し出し」で長さを指定します。
+
+**Fusionとの差**：FusionのExtrudeは結合/切り取り/交差などを同じダイアログで扱えますが、FreeCADのPartDesignはPad（追加）とPocket（除去）が別コマンドです。また平面選択とPartDesign Bodyの要件もFreeCADのままです。ボタンはコマンドの利用可否・ドキュメント有無・編集中・選択有無に応じて無効になります。単なるUI表示で形状を自動生成するものではありません。詳細パラメータと確定・キャンセルはFreeCAD標準のタスクパネルで操作します。
+
+**元の画面に戻す**：[Fusionモード無効](https://kana874.github.io/3DCAD/?fusionMode=off)（操作全体を無効）、または[作成パネルだけ無効](https://kana874.github.io/3DCAD/?designPalette=off)。いずれも再読み込みになるためFCStdデータを保存してください。
+
+**検証状況**：ソースのモックテストではコマンド名、スケッチ編集中と非編集中のガード、選択とドキュメントの有無、未対応コマンド拒否を検証。ブラウザで実際のスケッチ・押し出し・STEP保存まで動作するかは別途実機確認が必要です。8GB RAM環境でのレスポンスも未計測です。
+
+**参考資料**：[FreeCAD PartDesign NewSketch](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/PartDesign_NewSketch.md)、[FreeCAD PartDesign Pad](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/PartDesign_Pad.md)、[FreeCAD PartDesign Workbench](https://github.com/FreeCAD/FreeCAD/blob/main/src/Mod/PartDesign/Gui/Workbench.cpp)。2026-10-26確認、FreeCADのバージョンでコマンド登録は変わる場合があります。
+
 ## Fusion 360に近い操作モード（2026-10-26）
 
 Fusionから移行した人が基本操作を再学習せずに使えるよう、FreeCAD純正の`Gui::RevitNavigationStyle`とQt/FreeCADのコマンドショートカットを利用します。**CAD計算エンジンやQt Canvasにマウスイベントを注入しない**設計のため、通常のスケッチ操作や既存の日本語メニューとの干渉を抑えています。

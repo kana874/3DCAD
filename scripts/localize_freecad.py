@@ -15,6 +15,7 @@ from pathlib import Path
 MARKER = '<!-- freecad-web-ja: source customization -->'
 BOOT_SCRIPT = '<script src="/ja/freecad-ja.js" defer></script>'
 FUSION_SCRIPT = '<script src="/fusion/fusion-mode.js" defer></script>'
+DESIGN_SCRIPT = '<script src="/fusion/design-palette.js" defer></script>'
 FONT_JSON = '/ja/fonts.json'
 
 
@@ -38,7 +39,7 @@ def localize(page: str) -> str:
     head = '</head>'
     if page.count(head) != 1:
         raise ValueError("Upstream </head> anchor changed")
-    page = page.replace(head, f'{MARKER}\n{BOOT_SCRIPT}\n{FUSION_SCRIPT}\n{head}', 1)
+    page = page.replace(head, f'{MARKER}\n{BOOT_SCRIPT}\n{FUSION_SCRIPT}\n{DESIGN_SCRIPT}\n{head}', 1)
 
     qt = '       qt: {\n'
     if page.count(qt) != 1:
