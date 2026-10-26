@@ -4,6 +4,38 @@
 
 > **現状: GUIの日本語メニューと日本語フォント表示を外部ブラウザで確認済み。** 全ワークベンチとCAD操作の互換性・会社PCでの長時間利用は未検証です。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
 
+## Fusion 360に近い操作モード（2026-10-26）
+
+Fusionから移行した人が基本操作を再学習せずに使えるよう、FreeCAD純正の`Gui::RevitNavigationStyle`とQt/FreeCADのコマンドショートカットを利用します。**CAD計算エンジンやQt Canvasにマウスイベントを注入しない**設計のため、通常のスケッチ操作や既存の日本語メニューとの干渉を抑えています。
+
+標準で有効です。GitHub Pagesで <https://kana874.github.io/3DCAD/> を開いてください。
+
+| 操作 | Fusion 360 | このFreeCAD Web版 |
+|---|---|---|
+| 選択 | 左クリック | 左クリック |
+| 平行移動 | 中ボタンをドラッグ | 中ボタンをドラッグ |
+| 回転 | Shift + 中ボタンドラッグ | Shift + 中ボタンドラッグ |
+| 拡大・縮小 | ホイール | ホイール（カーソル位置中心） |
+| 押し出し | E | E：Part Designのパッド |
+| 穴 | H | H：Part Design穴 |
+| フィレット | F | F：Part Designフィレット |
+| 線・四角・円 | L / R / C | L / R / C：スケッチ編集中 |
+| 寸法拘束 | D | D：スケッチ寸法 |
+| トリム・オフセット | T / O | T / O：スケッチ編集中 |
+| 投影 | P | P：スケッチ投影（利用可能な場合） |
+| 移動・計測 | M / I | M：変形操作 / I：計測（コマンド対応時） |
+
+**重要な相違点**：Fusionの押し出しとFreeCADのパッドは完全に同義ではありません。FreeCADではPart DesignのBodyが必要で、スケッチ編集内ではコマンドが無効になる場合があります。FusionのSコマンド検索、ジョイント(J)、プレスプル(Q)、タイムライン風UI、ドラッグできるViewCubeは現段階で再現していません。ショートカットはFreeCAD側に存在するコマンドのみ割り当てるため、利用不可のコマンドはスキップします。
+
+**切り替え・復旧**：<https://kana874.github.io/3DCAD/?fusionMode=off> でFreeCAD標準の操作へ戻せます。事前に変更されたナビゲーション設定や既存ショートカットはバックアップ後に復元を試みます。リロード前にFCStd/STEPファイルをローカル保存してください。画面右下の「Fusion操作ガイド」からも切り替えられます。ブラウザ内保存や設定引継ぎには環境依存があります。
+
+- Autodesk Fusion公式キー一覧：[Fusion keyboard shortcuts](https://help.autodesk.com/cloudhelp/ENU/Fusion-GetStarted/files/GUID-F0491540-0324-470A-B651-2238D0EFAC30.htm)
+- 公式マウス操作：[Fusion preferences reference](https://help.autodesk.com/view/fusion360/ENU/?contextId=GS-SET-PREFERENCES)
+- FreeCAD Revitナビゲーション：[FreeCAD Mouse navigation](https://github.com/FreeCAD/FreeCAD-documentation/blob/main/wiki/Mouse_navigation.md)
+- 既存のコミュニティ実装（設計参考、コード転用なし）：[freecad-fusion](https://github.com/arxdsilva/freecad-fusion)（MIT）
+
+FreeCAD Web/WASMでのコマンド登録・ショートカット割当・日本語との併用は動作検証が必要です。UIとショートカットはAutodesk公式機能ではなく、互換操作を目指す非公式改修です。
+
 ## 日本語UIを標準化（2026-10-26）
 
 [FreeCAD Web 日本語版](https://kana874.github.io/3DCAD/) の**通常URLで日本語フォント・日本語メニューを起動**するよう変更。先行する `?fontMode=static` のブラウザ検証では、「ファイル」「編集」「表示」などのメニューと初期設定画面が日本語で表示され、□文字化けは見られませんでした。GUIの起動と基本表示は確認済みですが、全ワークベンチ・STEP入出力・8GB環境の長時間安定性は未検証です。
