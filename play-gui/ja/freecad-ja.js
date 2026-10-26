@@ -7,6 +7,16 @@
   document.documentElement.lang = 'ja';
   document.title = 'FreeCAD 日本語版 | ブラウザ3D CAD';
 
+  // Qt/WASM 1.0.8: adding a CJK font can trigger a WebAssembly indirect-call
+  // signature mismatch in QFontEngineFT on some browsers. Keep the boot path
+  // safe until a proper font-engine fix is validated.
+  // Opt in explicitly: ?experimentalFont=1 (diagnostic only).
+  if (new URLSearchParams(location.search).get('experimentalFont') !== '1') {
+    console.info('[freecad-web-ja] Experimental CJK font injection is disabled; use ?experimentalFont=1 for diagnostics');
+    return;
+  }
+
+
   const python = [
     "import sys",
     "try:",
