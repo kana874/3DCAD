@@ -82,8 +82,28 @@ fs.mkdirSync(output, {recursive: true});
     function near(actual, expected) { assert.ok(Math.abs(actual - expected) < 0.01, `${actual} != ${expected}`); }
     function pass(label) { passed.push(label); console.log('PASS', label); }
     try {
+      // Fixture setup: an empty document and a dark application palette.
+      await py('True', "App.newDocument('ReferenceCheck')");
+      await sleep(800);
+      assert.equal(await py('cad_workspace.WORKSPACE.reference_root.whichChild.getValue()'), -3);
+      assert.equal(await py('len(App.ActiveDocument.Objects)'), 0, 'references must not create model objects');
+      const gridButton = await py("(lambda w: [w.mapToGlobal(w.rect().center()).x(), w.mapToGlobal(w.rect().center()).y()])(cad_workspace.WORKSPACE.bar.widgetForAction(cad_workspace.WORKSPACE.actions['grid']))");
+      await page.mouse.click(...gridButton); await sleep(400);
+      assert.equal(await py('cad_workspace.WORKSPACE.reference_root.whichChild.getValue()'), -1);
+      await page.mouse.click(...gridButton); await sleep(400);
+      assert.equal(await py('cad_workspace.WORKSPACE.reference_root.whichChild.getValue()'), -3);
+      const originalPalette = await py('cad_workspace.WORKSPACE.bar.palette().color(QtGui.QPalette.Window).name()', 'from PySide6 import QtGui');
+      await py('True', "_original_palette = Gui.getMainWindow().palette()\n_dark_palette = QtGui.QPalette(_original_palette)\n_dark_palette.setColor(QtGui.QPalette.Window, QtGui.QColor('#242424'))\n_dark_palette.setColor(QtGui.QPalette.WindowText, QtGui.QColor('#eeeeee'))\n_dark_palette.setColor(QtGui.QPalette.ButtonText, QtGui.QColor('#eeeeee'))\nGui.getMainWindow().setPalette(_dark_palette)");
+      await sleep(500);
+      assert.equal(await py('cad_workspace.WORKSPACE.bar.palette().color(QtGui.QPalette.Window).name()'), '#242424');
+      await page.screenshot({path: path.join(output, 'empty-grid-dark.png')});
+      await py('True', 'Gui.getMainWindow().setPalette(_original_palette)');
+      await sleep(500);
+      assert.equal(await py('cad_workspace.WORKSPACE.bar.palette().color(QtGui.QPalette.Window).name()'), originalPalette);
+      pass('empty document references are visible, model stays empty, toolbar follows dark/light palette');
       await click('CAD_Button_create_sketch');
       await click('CAD_Button_start_sketch');
+      assert.equal(await py('cad_workspace.WORKSPACE.reference_root.whichChild.getValue()'), -1, 'Sketcher owns the edit grid');
       await click('CAD_Button_rectangle_exact');
       await fill('width', '50 mm'); await fill('height', '30 mm');
       await click('CAD_Button_add_geometry');
