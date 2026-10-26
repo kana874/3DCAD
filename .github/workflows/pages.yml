@@ -15,6 +15,7 @@ on:
       - scripts/build_static_jp_font.py
       - pages/**
       - tests/test_pages.py
+      - tests/test_fusion_preset.py
       - tests/test_ja_runtime.py
       - tests/test_pages_sw.mjs
   pull_request:
@@ -39,6 +40,7 @@ jobs:
         run: |
           python3 -m unittest discover -s tests -p 'test_pages.py' -v
           python3 -m unittest discover -s tests -p 'test_ja_runtime.py' -v
+          python3 -m unittest discover -s tests -p 'test_fusion_preset.py' -v
       - name: Verify Service Worker fallback with a real gzip WASM stream
         run: node tests/test_pages_sw.mjs
       - name: Build Japanese FreeCAD image
