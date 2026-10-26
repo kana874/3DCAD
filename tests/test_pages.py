@@ -50,6 +50,10 @@ class PagesBuildTests(unittest.TestCase):
             {"source":"/ja/NotoSansJP-VF.ttf","destination":"/usr/share/fonts/NotoSansJP-VF.ttf"}
         ]))
         (self.site/"ja/NotoSansJP-VF.ttf").write_bytes(b'MOCK FONT')
+        (self.site/"ja/fonts-static.json").write_text(json.dumps([
+            {"source":"/ja/NotoSansJP-Static.ttf","destination":"/usr/share/fonts/NotoSansJP-Static.ttf"}
+        ]))
+        (self.site/"ja/NotoSansJP-Static.ttf").write_bytes(b'MOCK STATIC FONT')
         (self.site/"manifest.webmanifest").write_text(json.dumps({
             "start_url":"/","scope":"/","icons":[{"src":"/icon-192.png"}]}))
         (self.site/"i18n/index.json").write_text(json.dumps({
@@ -66,6 +70,8 @@ class PagesBuildTests(unittest.TestCase):
         self.assertIn("__cfg.qt.module = WebAssembly.compile(__fcWasmBytes);",text)
         self.assertIn("get('wasmMode') !== 'stream'",text)
         self.assertIn('get("experimentalFont") === "1"',text)
+        self.assertIn('get("fontMode")',text)
+        self.assertIn('["ja/fonts-static.json"]',text)
         self.assertIn("register('./sw.js')",text)
         self.assertIn('href="./manifest.webmanifest"',text)
         self.assertIn("https://kana874.github.io/3DCAD/",text)
@@ -77,6 +83,8 @@ class PagesBuildTests(unittest.TestCase):
         self.assertEqual(list(files),["FreeCAD_ja.qm"])
         font=json.loads((self.site/"ja/fonts.json").read_text())[0]
         self.assertEqual(font["source"],"ja/NotoSansJP-VF.ttf")
+        static_font=json.loads((self.site/"ja/fonts-static.json").read_text())[0]
+        self.assertEqual(static_font["source"],"ja/NotoSansJP-Static.ttf")
         manifest=json.loads((self.site/"manifest.webmanifest").read_text())
         self.assertEqual(manifest["start_url"],"./")
         self.assertEqual(manifest["icons"][0]["src"],"./icon-192.png")
