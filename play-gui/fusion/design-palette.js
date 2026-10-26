@@ -30,7 +30,7 @@
   const out='/tmp/fusion-design-response.json';
   let source=null,state=null,pending=false,ready=false,seq=0,group='start';
   let root,tabs,actions,stage,message,lengthField,lengthButton,gridButton;
-  let nativeHidden=false;
+  let nativeHidden=false, lastGridSketch=null;
   fetch('./fusion/design-commands.py',{cache:'force-cache'})
     .then(r=>{if(!r.ok)throw Error('HTTP '+r.status);return r.text();})
     .then(s=>{source=s;})
@@ -129,6 +129,12 @@
             nativeHidden=true;
             document.documentElement.classList.add('fusion-integrated');
             setTimeout(()=>{if(canRun())send('fusion_gui');},350);
+          }
+          if(action==='state'&&state?.sketchEdit&&state?.activeSketch){
+            if(lastGridSketch!==state.activeSketch){
+              lastGridSketch=state.activeSketch;
+              if(!state.gridShown)setTimeout(()=>{if(canRun()&&!pending)send('grid');},950);
+            }
           }
           if(done)done(result);
         }else if(++tries>100){
