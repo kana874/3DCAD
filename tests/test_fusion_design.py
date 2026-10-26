@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
-"""Mocked native command dispatch and state-gating tests; no FreeCAD binary."""
+"""FreeCAD-less smoke tests: only declared FreeCAD commands and safer Body reuse."""
 import json
 from pathlib import Path
 import sys
@@ -10,95 +10,112 @@ from unittest.mock import mock_open, patch
 ROOT=Path(__file__).resolve().parents[1]
 SOURCE=(ROOT/'play-gui/fusion/design-commands.py').read_text(encoding='utf-8')
 
-class FreeCADMocks:
-    def __init__(self, has_document=True, editing=False, selected=0):
-        self.actions=[]
-        self.editor=editing
-        self.selected=selected
+class Document:
+    def __init__(self,bodies=None):
+        self.bodies=bodies or []
+        self.recomputes=0
+        self.transactions=[]
+    def findObjects(self,type_id):
+        return self.bodies if type_id=='PartDesign::Body' else []
+    def openTransaction(self,s):self.transactions.append(('open',s))
+    def commitTransaction(self):self.transactions.append(('commit',None))
+    def abortTransaction(self):self.transactions.append(('abort',None))
+    def recompute(self):self.recomputes+=1
+
+class Body:
+    TypeId='PartDesign::Body'
+    def __init__(self):
+        self.Tip=None
+        self.Group=[]
+        self.InListRecursive=[]
+
+class Fake:
+    def __init__(self,doc=True,edit=False,selected=None):
+        self.calls=[];self.edited=edit
+        self.body=Body();self.document=Document([self.body]) if doc else None
+        self.selected=selected or []
         self.app=types.ModuleType('FreeCAD')
         self.gui=types.ModuleType('FreeCADGui')
-        self.app.ActiveDocument=object() if has_document else None
-        self.gui.activeDocument=lambda:types.SimpleNamespace(
-            getInEdit=lambda: self.editor,
-            resetEdit=lambda: self.actions.append('resetEdit'))
-        self.gui.Selection=types.SimpleNamespace(
-            getSelectionEx=lambda: [object() for _ in range(self.selected)])
-        self.commands={
-            'Std_New','PartDesign_Body','PartDesign_NewSketch',
-            'Sketcher_CreateLine','Sketcher_CreateRectangle','Sketcher_CreateCircle',
-            'Sketcher_Dimension','Sketcher_Trimming',
-            'PartDesign_Pad','PartDesign_Pocket','PartDesign_Revolution',
-            'PartDesign_Fillet','PartDesign_Chamfer','PartDesign_Hole'
-        }
+        self.app.ActiveDocument=self.document
+        self.commands=set(('Std_New','PartDesign_Body','PartDesign_NewSketch','Sketcher_CreateLine',
+           'Sketcher_CreateRectangle','Sketcher_CreateCircle','Sketcher_Dimension',
+           'PartDesign_Pad','PartDesign_Pocket','PartDesign_Fillet'))
         self.gui.listCommands=lambda:list(self.commands)
-        self.gui.Command=types.SimpleNamespace(get=lambda n:object() if n in self.commands else None)
-        self.gui.runCommand=lambda n:self.actions.append(n)
-
-    def run(self, action):
+        self.gui.Command=types.SimpleNamespace(get=lambda n: object() if n in self.commands else None)
+        def run(name):
+            self.calls.append(name)
+            if name=='PartDesign_Body' and self.document:
+                self.document.bodies.append(Body())
+        self.gui.runCommand=run
+        self.view=types.SimpleNamespace(getActiveObject=lambda k: self.body if self.document else None,
+            setActiveObject=lambda k,b:self.calls.append(('activate',b)))
+        self.gui.activeDocument=lambda:types.SimpleNamespace(getInEdit=lambda:None,
+            activeView=lambda:self.view,resetEdit=lambda:self.calls.append('resetEdit'))
+        self.gui.Selection=types.SimpleNamespace(getSelectionEx=lambda:self.selected,
+            clearSelection=lambda:self.calls.append('clear'))
+    def run(self,action,value=0):
         code=SOURCE.replace('"__FUSION_DESIGN_REQUEST__"',json.dumps(action))
-        code=code.replace('__FUSION_DESIGN_ID__','73')
+        code=code.replace('__FUSION_DESIGN_ID__','11')
+        code=code.replace('__FUSION_DESIGN_VALUE__',str(value))
         with patch.dict(sys.modules,{'FreeCAD':self.app,'FreeCADGui':self.gui}):
             with patch('builtins.open',mock_open()):
-                space={'__name__':'__main__'}
-                exec(compile(code,'design-commands.py','exec'),space)
-                return space['_result']
+                ns={'__name__':'__main__'}
+                exec(compile(code,'design-commands.py','exec'),ns)
+                return ns['_result']
 
 class FusionDesignTests(unittest.TestCase):
-    def test_no_document_disables_design_commands(self):
-        f=FreeCADMocks(has_document=False)
-        r=f.run('body')
-        self.assertFalse(r['ok'])
-        self.assertFalse(r['state']['document'])
-        self.assertEqual(f.actions,[])
+    def test_only_new_on_empty_project(self):
+        f=Fake(doc=False)
+        self.assertFalse(f.run('body')['ok'])
         self.assertTrue(f.run('new')['ok'])
-        self.assertEqual(f.actions,['Std_New'])
-    def test_sketch_prefers_partdesign_create(self):
-        f=FreeCADMocks()
+        self.assertEqual(f.calls,['Std_New'])
+    def test_existing_body_is_activated_without_creating_another(self):
+        f=Fake()
         r=f.run('sketch')
         self.assertTrue(r['ok'],r)
-        self.assertEqual(f.actions,['PartDesign_NewSketch'])
-    def test_sketch_tools_only_in_edit_mode(self):
-        f=FreeCADMocks(editing=False)
-        self.assertFalse(f.run('line')['ok'])
-        f.editor=True
-        self.assertTrue(f.run('line')['ok'])
-        self.assertEqual(f.actions,['Sketcher_CreateLine'])
-        self.assertTrue(f.run('leave_sketch')['ok'])
-        self.assertIn('resetEdit',f.actions)
-    def test_solid_selection_and_edit_guards(self):
-        f=FreeCADMocks(selected=0)
+        self.assertIn(('activate',f.body),f.calls)
+        self.assertIn('PartDesign_NewSketch',f.calls)
+        self.assertNotIn('PartDesign_Body',f.calls)
+    def test_new_body_clears_selected_feature_before_creation(self):
+        f=Fake(selected=[types.SimpleNamespace(Object=object(),SubElementNames=[])])
+        r=f.run('body')
+        self.assertTrue(r['ok'])
+        self.assertLess(f.calls.index('clear'),f.calls.index('PartDesign_Body'))
+    def test_sketch_rejects_ambiguous_bodies(self):
+        f=Fake();f.document.bodies.append(Body())
+        f.view.getActiveObject=lambda key:None
+        r=f.run('sketch')
+        self.assertFalse(r['ok'])
+        self.assertIn('複数',r['message'])
+        self.assertNotIn('PartDesign_NewSketch',f.calls)
+    def test_pad_requires_selection(self):
+        f=Fake()
         self.assertFalse(f.run('pad')['ok'])
-        f.selected=1
+        f.selected=[types.SimpleNamespace(Object=object(),SubElementNames=[])]
         self.assertTrue(f.run('pad')['ok'])
-        f.editor=True
-        self.assertFalse(f.run('pocket')['ok'])
-        self.assertEqual(f.actions,['PartDesign_Pad'])
-    def test_body_presence_is_reported(self):
-        f=FreeCADMocks()
-        f.app.ActiveDocument=types.SimpleNamespace(
-            findObjects=lambda type_id:[object()] if type_id=='PartDesign::Body' else [])
-        self.assertTrue(f.run('state')['state']['hasBody'])
-        f.app.ActiveDocument=types.SimpleNamespace(findObjects=lambda type_id:[])
-        self.assertFalse(f.run('state')['state']['hasBody'])
-
-    def test_unknown_action_fails_closed(self):
-        f=FreeCADMocks()
-        self.assertFalse(f.run("__import__('os').system('echo unsafe')")['ok'])
-        self.assertFalse(f.run('magic')['ok'])
-        self.assertEqual(f.actions,[])
-    def test_source_is_published_and_no_mouse_synthesis(self):
+    def test_solid_numeric_requires_actual_pad(self):
+        f=Fake()
+        selected=types.SimpleNamespace(TypeId='PartDesign::Pad',Label='Pad001',Length=2.5)
+        f.selected=[types.SimpleNamespace(Object=selected,SubElementNames=[])]
+        r=f.run('length',12.5)
+        self.assertTrue(r['ok'],r)
+        self.assertEqual(selected.Length,12.5)
+        self.assertEqual(f.document.recomputes,1)
+        self.assertEqual(f.document.transactions[-1][0],'commit')
+        self.assertFalse(f.run('length',-3)['ok'])
+        self.assertEqual(selected.Length,12.5)
+    def test_rejects_unknown_code(self):
+        f=Fake()
+        self.assertFalse(f.run("__import__('os')")['ok'])
+        self.assertEqual(f.calls,[])
+    def test_js_ribbon_and_browser_optout(self):
         js=(ROOT/'play-gui/fusion/design-palette.js').read_text()
-        self.assertIn('window.__fcRunPyGuarded',js)
-        self.assertIn('window.__fcWorkReady',js)
-        self.assertIn('designPalette',js)
-        self.assertIn('fusionMode',js)
+        css=(ROOT/'play-gui/fusion/design-palette.css').read_text()
+        self.assertIn('fusion_gui',js)
+        self.assertIn("get('fusionUI')==='classic'",js)
+        self.assertIn('fd-dimensions',js)
+        self.assertIn("send(state?.sketchEdit?'sketch_dimension':'length')",js)
+        self.assertIn('fusion-integrated #screen',css)
         self.assertNotIn('dispatchEvent(new MouseEvent(',js)
-        self.assertIn('design-palette.css',js)
-        self.assertIn("if(action==='sketch'&&state?.document&&!state.hasBody)",js)
-        self.assertIn("send('body',result=>",js)
-        self.assertIn("setTimeout(()=>",js)
-        self.assertIn("send('sketch')",js)
-
-
 if __name__=='__main__':
     unittest.main()
