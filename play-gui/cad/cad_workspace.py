@@ -13,7 +13,7 @@ from cad_core import (CadError, ExtrusionSession, add_circle, add_rectangle,
                       body_of, create_sketch, length, selected_sketch,
                       sketch_in_edit, transaction, valid_shape)
 
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 WORKSPACE = None
 
 
@@ -44,6 +44,10 @@ class Workspace(QtCore.QObject):
         self.main = Gui.getMainWindow()
         super().__init__(self.main)
         self.dirty = True
+        self.reference_scene = None
+        self.reference_root = None
+        self.grid_visible = True
+        self.theme_signature = None
         self.session = None
         self.fields = {}
         self.actions = {}
@@ -99,7 +103,8 @@ class Workspace(QtCore.QObject):
 
     def status(self, text, error=False):
         self.message.setText(text)
-        self.message.setStyleSheet('color:#c73737' if error else 'color:#27658b')
+        dark = self.main.palette().color(QtGui.QPalette.Window).lightness() < 128
+        self.message.setStyleSheet('color:' + (('#ff9696' if dark else '#c73737') if error else ('#9ad4ff' if dark else '#27658b')))
         self.main.statusBar().showMessage(text, 12000)
 
     def safe(self, function, *args):
@@ -138,6 +143,9 @@ class Workspace(QtCore.QObject):
             sketch = sketch_in_edit(Gui)
             if sketch and hasattr(sketch.ViewObject, 'ShowGrid'):
                 sketch.ViewObject.ShowGrid = not sketch.ViewObject.ShowGrid
+            else:
+                self.grid_visible = not self.grid_visible
+                self.update_references()
         elif name == 'cancel':
             self.cancel()
         elif name in ('undo', 'redo'):
@@ -146,7 +154,7 @@ class Workspace(QtCore.QObject):
                 getattr(doc, name)()
                 self.home()
         elif name == 'fit':
-            Gui.activeDocument().activeView().fitAll()
+            self.fit_view()
         elif name == 'classic':
             self.stop()
         else:
@@ -185,7 +193,7 @@ class Workspace(QtCore.QObject):
         bar.setObjectName('CAD_Toolbar')
         bar.setMovable(False)
         bar.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
-        bar.setStyleSheet('QToolBar {background:#edf2f7;spacing:5px;padding:6px;} QToolButton {padding:7px;}')
+        bar.setStyleSheet('QToolBar {background:palette(window);color:palette(window-text);spacing:5px;padding:6px;} QToolButton {padding:7px;color:palette(button-text);} QToolButton:disabled {color:palette(mid);}')
         self.main.addToolBar(QtCore.Qt.TopToolBarArea, bar)
         groups = [
             [('new', '新規', None), ('open', '開く', None), ('save', '保存', None), ('export', '書出し', None)],
@@ -193,7 +201,7 @@ class Workspace(QtCore.QObject):
             [('line', '線 L', 'L'), ('rectangle', '長方形 R', 'R'), ('circle', '円 C', 'C'),
              ('dimension', '寸法 D', 'D'), ('trim', 'トリム T', 'T'), ('construction', '補助線 X', 'X')],
             [('extrude', '押し出し E', 'E'), ('fillet', 'フィレット F', 'F'), ('chamfer', '面取り', None)],
-            [('search', '検索 S', 'S'), ('grid', 'グリッド', None), ('fit', '全体表示', None), ('classic', '標準GUI', None)]
+            [('search', '検索 S', 'S'), ('grid', '原点・グリッド', None), ('fit', '全体表示', None), ('classic', '標準GUI', None)]
         ]
         for group in groups:
             if bar.actions():
@@ -380,7 +388,7 @@ class Workspace(QtCore.QObject):
                 add_rectangle(App, sketch, self.value('width'), self.value('height'), x, y)
             else:
                 add_circle(App, sketch, self.value('diameter'), x, y)
-            Gui.activeDocument().activeView().fitAll()
+            self.fit_view()
             self.sketch_home(sketch)
             self.status('寸法拘束付きの図形を作成しました。位置は必要に応じて拘束してください。')
         self.button('作成', create, 'add_geometry')
@@ -458,7 +466,7 @@ class Workspace(QtCore.QObject):
         self.session = None
         Gui.Selection.clearSelection()
         if first_solid:
-            QtCore.QTimer.singleShot(300, lambda: Gui.activeDocument().activeView().fitAll() if Gui.activeDocument() else None)
+            QtCore.QTimer.singleShot(300, lambda: self.fit_view() if Gui.activeDocument() else None)
         self.home()
         self.status('押し出しを作成しました。履歴のダブルクリックで距離を変更できます。')
 
@@ -593,10 +601,101 @@ class Workspace(QtCore.QObject):
             if isinstance(widget, QtWidgets.QDockWidget) and widget.objectName() in ('Tasks', 'Combo View'):
                 widget.show()
 
+    def update_theme(self):
+        palette = self.main.palette()
+        colors = tuple(palette.color(role).name() for role in
+                       (QtGui.QPalette.Window, QtGui.QPalette.WindowText,
+                        QtGui.QPalette.ButtonText, QtGui.QPalette.Mid))
+        if colors != self.theme_signature:
+            self.theme_signature = colors
+            background, foreground, button, disabled = colors
+            self.bar.setStyleSheet(
+                'QToolBar {background:%s;color:%s;spacing:5px;padding:6px;}'
+                'QToolButton {padding:7px;color:%s;}'
+                'QToolButton:disabled {color:%s;}'
+                'QToolButton:hover {background:%s;color:%s;}'
+                'QToolButton:pressed {background:%s;color:%s;}' %
+                (*colors, palette.color(QtGui.QPalette.Window).lighter(130).name(), foreground,
+                 palette.color(QtGui.QPalette.Window).darker(115).name(), foreground))
+
+    def detach_references(self):
+        if self.reference_scene is not None and self.reference_root is not None:
+            try:
+                self.reference_scene.removeChild(self.reference_root)
+            except RuntimeError:
+                pass  # The document/view may already have been destroyed.
+        self.reference_scene = self.reference_root = None
+
+    def update_references(self):
+        # Scene-only references never enter the document, STEP or FCStd files.
+        from pivy import coin
+        view = Gui.activeDocument().activeView() if Gui.activeDocument() else None
+        scene = view.getSceneGraph() if view else None
+        if scene != self.reference_scene:
+            self.detach_references()
+            if scene is not None:
+                root = coin.SoSwitch()
+                pick = coin.SoPickStyle()
+                pick.style = coin.SoPickStyle.UNPICKABLE
+                root.addChild(pick)
+                light = coin.SoLightModel()
+                light.model = coin.SoLightModel.BASE_COLOR
+                root.addChild(light)
+                def lines(points, color, width):
+                    group = coin.SoSeparator()
+                    material = coin.SoBaseColor()
+                    material.rgb = color
+                    style = coin.SoDrawStyle()
+                    style.lineWidth = width
+                    coords = coin.SoCoordinate3()
+                    coords.point.setValues(0, len(points), points)
+                    edges = coin.SoLineSet()
+                    edges.numVertices.setValues(0, len(points) // 2, [2] * (len(points) // 2))
+                    for node in (material, style, coords, edges):
+                        group.addChild(node)
+                    root.addChild(group)
+                points = []
+                for n in range(-10, 11):
+                    if n:
+                        k = n * 10.0
+                        points.extend([(k, -100, 0), (k, 100, 0), (-100, k, 0), (100, k, 0)])
+                lines(points, (0.48, 0.52, 0.57), 1)
+                lines([(-100, 0, 0), (100, 0, 0)], (0.9, 0.25, 0.25), 2)
+                lines([(0, -100, 0), (0, 100, 0)], (0.2, 0.7, 0.35), 2)
+                lines([(0, 0, -30), (0, 0, 30)], (0.25, 0.5, 1.0), 2)
+                root.whichChild = coin.SO_SWITCH_ALL
+                scene.addChild(root)
+                self.reference_scene, self.reference_root = scene, root
+                if not sketch_in_edit(Gui) and not any(not o.Shape.isNull() for o in App.ActiveDocument.Objects if hasattr(o, 'Shape')):
+                    view.viewAxonometric()
+                    view.fitAll()
+        if self.reference_root is not None:
+            # Native Sketcher owns its grid while editing, including non-XY planes.
+            self.reference_root.whichChild = coin.SO_SWITCH_ALL if self.grid_visible and not sketch_in_edit(Gui) else coin.SO_SWITCH_NONE
+
+    def fit_view(self):
+        # Keep reference geometry out of the model's fit-to-view bounds.
+        from pivy import coin
+        view = Gui.activeDocument().activeView() if Gui.activeDocument() else None
+        if view is None:
+            return
+        self.update_references()
+        root = self.reference_root
+        previous = root.whichChild.getValue() if root is not None else None
+        try:
+            if root is not None and App.ActiveDocument and any(not o.Shape.isNull() for o in App.ActiveDocument.Objects if hasattr(o, 'Shape')):
+                root.whichChild = coin.SO_SWITCH_NONE
+            view.fitAll()
+        finally:
+            if root is not None:
+                root.whichChild = previous
+
     def tick(self):
         try:
             doc = App.ActiveDocument
             edit = sketch_in_edit(Gui)
+            self.update_theme()
+            self.update_references()
             signature = (doc.Name if doc else None, edit.Name if edit else None,
                          bool(Gui.activeDocument() and Gui.activeDocument().getInEdit()))
             if signature != self.signature:
@@ -635,9 +734,9 @@ class Workspace(QtCore.QObject):
             action.setEnabled(not locked or name == 'cancel')
         # Native Sketcher must receive Esc while drawing; only the extrusion
         # session owns it globally. Avoid consuming native tool cancellation.
-        for name in ('line', 'rectangle', 'circle', 'dimension', 'trim', 'construction', 'finish', 'grid'):
+        for name in ('line', 'rectangle', 'circle', 'dimension', 'trim', 'construction', 'finish'):
             self.actions[name].setEnabled(bool(edit) and not locked)
-        for name in ('extrude', 'fillet', 'chamfer', 'fit', 'save', 'export'):
+        for name in ('extrude', 'fillet', 'chamfer', 'fit', 'save', 'export', 'grid'):
             self.actions[name].setEnabled(bool(doc) and not locked)
         self.syncing = True
         previous_block = self.tree.blockSignals(True)
@@ -728,6 +827,7 @@ class Workspace(QtCore.QObject):
     def stop(self):
         self.cancel()
         self.timer.stop()
+        self.detach_references()
         Gui.Selection.removeObserver(self.observer)
         App.removeDocumentObserver(self.observer)
         for name, shortcut in self.saved_shortcuts.items():
