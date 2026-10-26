@@ -99,6 +99,16 @@ def site(site_dir, base, version):
     html = replace_one(html, "} catch(e){ append('engine prefetch failed: '+e,'err'); }",
                        "} catch(e){ append('engine prefetch failed: '+e,'err'); throw e; }",
                        "fail closed")
+    # The generated FreeCAD.js does NOT read Module.wasmBinary: it always calls
+    # findWasmBinary() to fetch FreeCAD.wasm again. Qt's documented qt.module
+    # option injects instantiateWasm with a precompiled WebAssembly.Module.
+    # That prevents a 404 for FreeCAD.wasm (we only publish FreeCAD.wasm.gz).
+    html = replace_one(
+        html, "const instance = window.fcInstance = await qtLoad(__cfg);",
+        "__cfg.qt.module = WebAssembly.compile(__fcWasmBytes);\n"
+        "     const instance = window.fcInstance = await qtLoad(__cfg);",
+        "Qt precompiled module injection")
+
     # The existing app gate runs after body scripts; register COI worker early.
     insert = """<!-- freecad-ja-pages-v1: cross-origin isolation via same-origin SW -->
 <script src="./coi-boot.js"></script>
