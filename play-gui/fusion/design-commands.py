@@ -134,7 +134,7 @@ def target_for_sketch(app, gui):
     body = None
     for candidate in bodies:
         try:
-            if obj == candidate or obj == candidate.Tip or obj in candidate.Group or candidate in obj.InListRecursive:
+            if obj is not None and (obj == candidate or obj == candidate.Tip or obj in candidate.Group or candidate in obj.InListRecursive):
                 body = candidate
                 break
         except Exception:
