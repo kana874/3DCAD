@@ -50,11 +50,11 @@ def site(site_dir, base, version):
                        "navigator.serviceWorker.register('./sw.js')", "service-worker")
     # Only browser paths, not virtual Emscripten paths such as /home/web_user/.
     html = re.sub(r'(href|src)="/(?!/)', r'\1="./', html)
-    # Avoid loading the experimental variable CJK font into Qt's WASM
-    # filesystem unless explicitly testing its font engine. The font loader
-    # may trap on certain Edge/Chrome combinations with signature mismatch.
+    # Use the fixed-weight Noto Sans JP TTF for ordinary visitors.
+    # Opt out with ?fontMode=off; the variable-font test remains opt-in.
+    # Match the mode precedence in play-gui/ja/freecad-ja.js exactly.
     html = replace_one(html, 'preload: ["/ja/fonts.json"]',
-                       'preload: ((new URLSearchParams(location.search).get("fontMode") || "").startsWith("static") ? ["ja/fonts-static.json"] : (new URLSearchParams(location.search).get("experimentalFont") === "1" ? ["ja/fonts.json"] : []))', "Qt preload")
+                       'preload: (new URLSearchParams(location.search).get("fontMode") === "off" ? [] : (["static", "static-register"].includes(new URLSearchParams(location.search).get("fontMode")) ? ["ja/fonts-static.json"] : (new URLSearchParams(location.search).get("experimentalFont") === "1" ? ["ja/fonts.json"] : ["ja/fonts-static.json"])))', "Qt preload")
     # The pinned production Docker image stamps ?v=<content-hash> while our
     # unit fixture does not. Match both forms, never the comment text.
     html, n_wasm = re.subn(

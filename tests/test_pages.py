@@ -72,6 +72,8 @@ class PagesBuildTests(unittest.TestCase):
         self.assertIn('get("experimentalFont") === "1"',text)
         self.assertIn('get("fontMode")',text)
         self.assertIn('["ja/fonts-static.json"]',text)
+        self.assertIn('get("fontMode") === "off"',text)
+        self.assertIn('["ja/fonts.json"]',text)
         self.assertIn("register('./sw.js')",text)
         self.assertIn('href="./manifest.webmanifest"',text)
         self.assertIn("https://kana874.github.io/3DCAD/",text)

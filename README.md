@@ -2,7 +2,18 @@
 
 本リポジトリは [Virtastic/freecad-web](https://github.com/Virtastic/freecad-web) (FreeCAD 1.1.3 / WebAssembly) をもとにした、**日本語専用のカスタマイズ候補**です。
 
-> **現状: Dockerビルド・静的配信テスト成功、ブラウザの日本語描画は未検証。** 日本語表示を保証する完成ビルドではありません。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
+> **現状: GUIの日本語メニューと日本語フォント表示を外部ブラウザで確認済み。** 全ワークベンチとCAD操作の互換性・会社PCでの長時間利用は未検証です。Qt for WebAssemblyで日本語の字形が□になる問題に対し、日本語フォントの同梱、Qtへの動的登録、言語設定の固定化を実装しています。動作確認とログ診断が必要です。
+
+## 日本語UIを標準化（2026-10-26）
+
+[FreeCAD Web 日本語版](https://kana874.github.io/3DCAD/) の**通常URLで日本語フォント・日本語メニューを起動**するよう変更。先行する `?fontMode=static` のブラウザ検証では、「ファイル」「編集」「表示」などのメニューと初期設定画面が日本語で表示され、□文字化けは見られませんでした。GUIの起動と基本表示は確認済みですが、全ワークベンチ・STEP入出力・8GB環境の長時間安定性は未検証です。
+
+- **通常URL（既定）**：固定ウェイトのNoto Sans JPを読み込み、FreeCADGui.setLocale('Japanese') と updateLocale() でUI言語を日本語に変更。
+- **<https://kana874.github.io/3DCAD/?fontMode=off>**：Qtの日本語フォント登録を行わない回復モード。日本語は□表示になる可能性があります。
+- **<https://kana874.github.io/3DCAD/?fontMode=static-register>**：フォント登録のみの診断モード。UIフォントの切替はしません。
+- **<https://kana874.github.io/3DCAD/?experimentalFont=1>**：可変フォント診断。過去にWebAssemblyのfunction signature mismatchが報告されたため通常使用しないでください。
+
+初期表示後にメニューの言語が変わる構成です。ブラウザの既存設計データがある場合は、リロード前にFCStd/STEPとしてダウンロードしてください。
 
 ## 日本語設定と翻訳UIは別（2026-10-26）
 
@@ -10,7 +21,7 @@ Edgeの実機画像では、`?fontMode=static` により日本語の文字（設
 
 **修正**：静的フォントを登録・適用した後、ワークベンチの準備が完了した時点で `FreeCADGui.setLocale('Japanese')` と `FreeCADGui.updateLocale()` を実行し、GUI内の既存コマンドを再翻訳します。公開済みQMファイルは `i18n/index.json` の日本語版のみが対象です。一部ワークベンチの表示は再起動が必要な場合があります。
 
-試験用：[日本語フォント＋翻訳を有効化](https://kana874.github.io/3DCAD/?fontMode=static)。Qt/WASMの描画互換性はブラウザ依存なので、まず機密性のないサンプルのみで確認してください。通常URLではこれまでどおりフォント登録を実行せず、安全側を維持します。
+試験用：[日本語フォント＋翻訳を有効化](https://kana874.github.io/3DCAD/?fontMode=static)。Qt/WASMの描画互換性はブラウザ依存なので、まず機密性のないサンプルのみで確認してください。通常URLでは静的日本語フォントとFreeCADの翻訳APIを自動適用します。復旧モードは`?fontMode=off`です。
 
 ## 静的日本語TrueTypeフォントの診断モード（2026-10-26）
 
@@ -22,7 +33,7 @@ Edgeの実機画像では、`?fontMode=static` により日本語の文字（設
 
 - `https://kana874.github.io/3DCAD/?fontMode=static-register`：静的フォントを読み込んでQtに登録するだけ。UIフォントは変更しない。登録時のクラッシュ有無を調査。
 - `https://kana874.github.io/3DCAD/?fontMode=static`：登録に加え、Qtのアプリケーションフォントとして設定する。日本語表示改善を試す。**起動失敗やクラッシュの可能性がある試験機能。**
-- 通常の `https://kana874.github.io/3DCAD/` は変更せず、実験的な登録を行わない。
+- 通常の `https://kana874.github.io/3DCAD/` は現在、静的TTFによる日本語表示を標準採用しています。
 - 以前の `?experimentalFont=1` は可変フォントの比較診断用として残している。
 
 固定ウェイトフォントはGoogle FontsのNoto Sans JP（SIL OFL）をDockerビルド中にfontToolsで生成し、漢字のcmapと可変フォントテーブルが残らないことを検証する。公開Pagesに配布されるファイルはブラウザ内でのみ使われる。Qtのレンダラに依存するため、ビルドやFontDB登録成功だけで正常描画を保証しない。
@@ -31,7 +42,7 @@ Edgeの実機画像では、`?fontMode=static` により日本語の文字（設
 
 Edge 155でFreeCAD起動中に `QFontEngineFT::init` → `QWasmFontDatabase::fontEngine` で `RuntimeError: function signature mismatch` が再現したため、WebAssembly/Qtのフォント登録を通常起動から切り離しました。これは**原因の断定ではなく、A/B診断用の暫定対処**です。
 
-- **通常URL**：`https://kana874.github.io/3DCAD/` — 実験的なNoto Sans JP読み込みとQtへのフォント登録を無効化します。日本語UIは「□」表示になる可能性がありますが、クラッシュ回避を優先します。
+- **以前の通常URLの動作**：フォント登録を無効にしていました。現在は静的フォントによる日本語表示を標準化し、明示的な`?fontMode=off`で旧モードに戻せます。
 - **フォント診断**：`?experimentalFont=1` — 日本語フォントプリロードとQFontDatabase追加を有効化。**クラッシュの可能性があるため作業ファイルを保存してから試すこと。**
 - **WASM起動方式診断**：`?wasmMode=stream` — Qtのプリコンパイル済みWASMモジュール注入を使用せず、Service Worker経由でEmscripten標準のWASM fetch/instantiateStreamingを使用します。
 - **組み合わせ**：`?experimentalFont=1&wasmMode=stream` — 問題がフォント追加とWASM起動方式のどちらに関係するか調査するためのモード。
