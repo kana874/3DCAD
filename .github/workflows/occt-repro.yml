@@ -1,0 +1,30 @@
+name: OCCT isolated reproduction
+on:
+  pull_request:
+    paths:
+      - 'tests/occt_nan_probe.cjs'
+      - '.github/workflows/occt-repro.yml'
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --progress=plain -f Dockerfile.ja -t freecad-web-ja:probe .
+      - name: Prepare distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cid=$(docker create freecad-web-ja:probe)
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid":/usr/share/nginx/html/. _site/
+          cp pages/sw.js pages/coi-boot.js _site/
+          python3 scripts/build_pages.py _site --base /3DCAD/ --version 1.0.8-ja1
+      - run: npm ci --ignore-scripts
+      - name: Probe curve in isolated browser
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node tests/occt_nan_probe.cjs _site
