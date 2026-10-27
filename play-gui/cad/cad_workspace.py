@@ -526,6 +526,12 @@ class Workspace(QtCore.QObject):
         self.dirty = True
 
     def sketch_home(self, sketch=None):
+        # The WASM compositor also repairs hidden edit providers on its 1.5s
+        # timer. Complete that repair before accepting drawing input, otherwise
+        # its delayed ViewFit can change the camera between consecutive picks.
+        if sketch is not None and not sketch.ViewObject.Visibility:
+            sketch.ViewObject.Visibility = True
+            Gui.SendMsgToActiveView('ViewFit')
         self.current_command = None
         self.clear_panel('スケッチ')
         self.button('幅・高さを指定して長方形', lambda: self.geometry_panel('rectangle_exact'), 'rectangle_exact')

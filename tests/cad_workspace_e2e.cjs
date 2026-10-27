@@ -350,6 +350,7 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       await py('True', "App.newDocument('SketchToolsCheck')\nApp.ParamGet('User parameter:BaseApp/Preferences/Mod/Sketcher/Tools').SetInt('OnViewParameterVisibility',1)");
       await sleep(500);
       await click('CAD_Button_create_sketch'); await click('CAD_Button_start_sketch');
+      assert.equal(await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Visibility'),true);
       await py('True', 'Gui.activeDocument().activeView().getCameraNode().height.setValue(100)');
       await press('r'); await sleep(600);
       assert.equal(await py('cad_workspace.WORKSPACE.native_task_sketch'),true);
