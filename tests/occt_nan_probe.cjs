@@ -66,7 +66,7 @@ fs.mkdirSync(output, {recursive: true});
       return result;
     }
     await probe('valid', "_e=Part.LineSegment(App.Vector(0,0,0),App.Vector(1,0,0)).toShape(0.0,1.0)");
-    await probe('nan', "_e=Part.LineSegment(App.Vector(0,0,0),App.Vector(1,0,0)).toShape(float('nan'),1.0)");
+    await probe('nan', "_e=Part.LineSegment(App.Vector(float('nan'),0,0),App.Vector(1,0,0))");
   } finally {
     if (browser) await browser.close();
     server.kill();
