@@ -403,7 +403,7 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         // Reproduce the visible multi-body/native Start Part state from the report.
         // Import and model construction are explicit fixtures; Body creation and
         // cancellation use the dedicated search UI and real keyboard input.
-        await py('True', "import Part\n_d=App.newDocument('NativeBodyCheck')\n_b=_d.addObject('PartDesign::Body','Body')\n_f=_b.newObject('PartDesign::Feature','Base')\n_f.Shape=Part.makeBox(20,30,40)\n_d.recompute()\n_d.saveAs('/tmp/native-body.FCStd')\n_d.mergeProject('/tmp/native-body.FCStd')\n_d.mergeProject('/tmp/native-body.FCStd')\n_d.recompute()");
+        await py('True', "import Part\n_d=App.newDocument('NativeBodyCheck')\n_b=_d.addObject('PartDesign::Body','Body')\n_f=_b.newObject('PartDesign::Feature','Base')\n_f.Shape=Part.makeBox(20,30,40)\n_d.recompute()\n_d.saveAs('/tmp/native-body.FCStd')\n_d.mergeProject('/tmp/native-body.FCStd')\n_d.mergeProject('/tmp/native-body.FCStd')\n_d.recompute()\nGui.Selection.clearSelection()");
         const before=await py('[(o.Name,o.Shape.Volume) for o in App.ActiveDocument.findObjects("PartDesign::Body")]');
         assert.equal(before.length,3);
         for (let i=0;i<2;i++) {
