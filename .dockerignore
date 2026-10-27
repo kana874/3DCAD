@@ -21,6 +21,12 @@
 !scripts/localize_freecad.py
 
 !scripts/build_static_jp_font.py
+!scripts/patch_occt_wasm.py
+
+# OCCT source and notices for the pinned finite-parameter guard
+!patches/
+!patches/occt/
+!patches/occt/**
 
 # Ship Fusion-style FreeCAD browser bridge
 !play-gui/fusion/
