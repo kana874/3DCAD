@@ -4188,6 +4188,27 @@ window.fcRunPy = fcRunPy;
     // exists, and on a cold first load (empty HTTP cache) it does not by 11 s -- the
     // observer was never installed, so nothing was ever saved, and the work of a user's
     // very first session was the one thing guaranteed to be lost.
+    // CAD_LOCAL_SETTINGS_ONLY: preserve settings and optional sharing without CAD autosave.
+    var CAD_PREFS = "import FreeCAD as _App\ntry: _App.saveParameter()\nexcept Exception: pass\n";
+    var CAD_SHARE = "try:\n import fcweb_share as _fs; _fs.tick()\nexcept Exception: pass\n";
+    var CAD_MESH = ["import FreeCAD as _App", "if not getattr(_App,'_cad_mesh_observer',None):", " class _CadMeshObserver:", "  def slotChangedObject(self,o,prop=None):", "   try:", "    mesh=getattr(o,'Mesh',None)", "    if prop in (None,'Mesh') and mesh is not None and mesh.CountFacets>50000 and o.ViewObject.SelectionStyle!='BoundBox': o.ViewObject.SelectionStyle='BoundBox'", "   except Exception: pass", " _App._cad_mesh_observer=_CadMeshObserver()", " _App.addDocumentObserver(_App._cad_mesh_observer)", "for _d in _App.listDocuments().values():", " for _o in _d.Objects: _App._cad_mesh_observer.slotChangedObject(_o)"].join("\n");
+    var CAD_MESH_READY = false;
+    setInterval(function(){ if(window.__fcWorkReady && !window.__fcPyBusy && !CAD_MESH_READY) { CAD_MESH_READY=true; runPy(CAD_MESH); } }, 500);
+    setInterval(function(){ if(window.__fcWorkReady) runPy(CAD_SHARE); }, 1500);
+    function saveCADPreferences(){
+      if (!window.__fcAppReady) { window.__cadPrefsPending=false; return; }
+      if (window.__fcPyBusy) {
+        if (!window.__cadPrefsPending) {
+          window.__cadPrefsPending=true;
+          setTimeout(function(){ window.__cadPrefsPending=false; saveCADPreferences(); }, 200);
+        }
+        return;
+      }
+      window.__cadPrefsPending=false; runPy(CAD_PREFS);
+    }
+    setInterval(saveCADPreferences, 120000);
+    document.addEventListener('visibilitychange', function(){ if(document.hidden) saveCADPreferences(); });
+    window.addEventListener('pagehide', saveCADPreferences);
     // CAD_LOCAL_FILES: browser CAD autosave and restore disabled.
     if (false) (function(){
       var installed = false, restored = false;

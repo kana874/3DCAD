@@ -432,7 +432,19 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
           }
           throw new Error('Timed out waiting for '+ext+' browser download');
         }
+        // Add a parametric sketch and pad so the downloaded native file is
+        // checked for editable history, not only static imported solids.
+        await py('True', "_pd=App.ActiveDocument.addObject('PartDesign::Body','ParametricBody')\n_ps=_pd.newObject('Sketcher::SketchObject','EditableSketch')\ncad_workspace.add_rectangle(App,_ps,4,6)\n_pp=_pd.newObject('PartDesign::Pad','EditablePad')\n_pp.Profile=_ps\n_pp.Length=10\nApp.ActiveDocument.recompute()");
+        let meshObserver=false;
+        for (let i=0;i<20;i++) {
+          meshObserver=await py("hasattr(App,'_cad_mesh_observer')");
+          if (meshObserver) break;
+          await sleep(250);
+        }
+        assert.equal(meshObserver,true,'large-mesh display protection must remain available');
+        assert.equal(await py("_mesh_probe.ViewObject.SelectionStyle", "from types import SimpleNamespace\n_mesh_probe=SimpleNamespace(Mesh=SimpleNamespace(CountFacets=50001),ViewObject=SimpleNamespace(SelectionStyle='Full'))\nApp._cad_mesh_observer.slotChangedObject(_mesh_probe,'Mesh')"),'BoundBox');
         assert.equal(await py("not hasattr(App,'_fcweb_saver')"),true,'CAD autosave must not start');
+        assert.equal(await py("os.path.exists('/tmp/cad-open-documents')",'import os'),true,'an open design must guard against accidental page closure');
         await click('CAD_Action_save');
         const saved=await waitDownload('.fcstd');
         assert.ok(fs.statSync(saved).size>500,'FCStd was downloaded to disk');
@@ -442,14 +454,18 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         await chooser.accept([saved]);
         let opened=false;
         for (let i=0;i<80;i++) {
-          opened=await py("App.ActiveDocument is not None and App.ActiveDocument.Name!='NativeBodyCheck' and len(App.ActiveDocument.findObjects('PartDesign::Body'))==5");
+          opened=await py("App.ActiveDocument is not None and App.ActiveDocument.Name!='NativeBodyCheck' and len(App.ActiveDocument.findObjects('PartDesign::Body'))==6");
           if (opened) break;
           await sleep(250);
         }
         assert.equal(opened,true,'downloaded FCStd must reopen through the real file picker');
-        assert.equal(await py("sum(1 for o in App.ActiveDocument.findObjects('PartDesign::Body') if not o.Shape.isNull())"),3);
+        assert.equal(await py("sum(1 for o in App.ActiveDocument.findObjects('PartDesign::Body') if not o.Shape.isNull())"),4);
+        assert.equal(await py("App.ActiveDocument.getObject('EditableSketch').GeometryCount"),4);
+        await py('True',"App.ActiveDocument.getObject('EditablePad').Length=20\nApp.ActiveDocument.recompute()");
+        near(await py("App.ActiveDocument.getObject('EditablePad').Shape.Volume"),480);
+        await py('True',"App.ActiveDocument.getObject('EditablePad').Length=10\nApp.ActiveDocument.recompute()");
         assert.equal(await py("App.ActiveDocument.FileName.startswith('/tmp/_up/')"),true,'opened CAD data stays in transient storage');
-        pass('local FCStd download -> browser file picker -> reopen five bodies without browser CAD autosave');
+        pass('local FCStd download -> picker reopen -> edit parametric history without browser CAD autosave');
         await click('CAD_Action_export');
         await next('export_scope'); await next('export_scope'); // all bodies
         await click('CAD_Button_export_step');
@@ -458,17 +474,17 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.ok(stepBytes.length>500,'STEP was downloaded to disk');
         await page.evaluate(bytes=>window.fcInstance.FS.writeFile('/tmp/downloaded.step',new Uint8Array(bytes)),Array.from(stepBytes));
         const info=await py("_step_info","import Part\n_shape=Part.read('/tmp/downloaded.step')\n_step_info={'solids':len(_shape.Solids),'volume':_shape.Volume}");
-        assert.equal(info.solids,3);
-        near(info.volume,72000);
-        pass('STEP export -> browser download -> read back three exact solids');
+        assert.equal(info.solids,4);
+        near(info.volume,72240);
+        pass('STEP export -> browser download -> read back four exact solids');
         const bodyPoint=await py("(lambda w,i:[w.tree.viewport().mapToGlobal(w.tree.visualItemRect(i).center()).x(),w.tree.viewport().mapToGlobal(w.tree.visualItemRect(i).center()).y()])(cad_workspace.WORKSPACE,cad_workspace.WORKSPACE.tree_items['Body'])");
         await page.mouse.click(...bodyPoint); await sleep(400);
         assert.ok(await py("any(o.Name=='Body' for o in Gui.Selection.getSelection())"),'body selected through browser tree');
-        const beforeSelected=new Set(fs.readdirSync(downloadDir));
+        const beforeSelected=new Map(fs.readdirSync(downloadDir).filter(n=>n.toLowerCase().endsWith('.step')).map(n=>[n,fs.readFileSync(path.join(downloadDir,n))]));
         await click('CAD_Action_export'); await next('export_scope'); await click('CAD_Button_export_step');
         let selectedStep;
         for (let i=0;i<600;i++) {
-          selectedStep=fs.readdirSync(downloadDir).find(n=>n.toLowerCase().endsWith('.step')&&!beforeSelected.has(n));
+          selectedStep=fs.readdirSync(downloadDir).find(n=>n.toLowerCase().endsWith('.step')&&(!beforeSelected.has(n)||!fs.readFileSync(path.join(downloadDir,n)).equals(beforeSelected.get(n))));
           if (selectedStep && !fs.readdirSync(downloadDir).some(n=>n.endsWith('.crdownload'))) break;
           await sleep(100);
         }
@@ -476,24 +492,32 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         await page.evaluate(bytes=>window.fcInstance.FS.writeFile('/tmp/selected.step',new Uint8Array(bytes)),Array.from(fs.readFileSync(path.join(downloadDir,selectedStep))));
         const selectedInfo=await py("_selected_info","import Part\n_selected_shape=Part.read('/tmp/selected.step')\n_selected_info={'solids':len(_selected_shape.Solids),'volume':_selected_shape.Volume}");
         assert.equal(selectedInfo.solids,1); near(selectedInfo.volume,24000);
-        await py('True',"_bodies=[o for o in App.ActiveDocument.findObjects('PartDesign::Body') if not o.Shape.isNull()]\n[o.ViewObject.show() for o in _bodies]\n_bodies[1].ViewObject.hide()");
+        await py('True',"_bodies=[o for o in App.ActiveDocument.findObjects('PartDesign::Body') if not o.Shape.isNull()]\nfor _o in _bodies: _o.ViewObject.Visibility=True\n_bodies[1].ViewObject.Visibility=False");
         await sleep(500);
-        const beforeVisible=new Set(fs.readdirSync(downloadDir));
+        const beforeVisible=new Map(fs.readdirSync(downloadDir).filter(n=>n.toLowerCase().endsWith('.step')).map(n=>[n,fs.readFileSync(path.join(downloadDir,n))]));
         await click('CAD_Action_export'); await click('CAD_Button_export_step');
         let visibleStep;
         for (let i=0;i<600;i++) {
-          visibleStep=fs.readdirSync(downloadDir).find(n=>n.toLowerCase().endsWith('.step')&&!beforeVisible.has(n));
+          visibleStep=fs.readdirSync(downloadDir).find(n=>n.toLowerCase().endsWith('.step')&&(!beforeVisible.has(n)||!fs.readFileSync(path.join(downloadDir,n)).equals(beforeVisible.get(n))));
           if (visibleStep && !fs.readdirSync(downloadDir).some(n=>n.endsWith('.crdownload'))) break;
           await sleep(100);
         }
         assert.ok(visibleStep,'visible-body STEP must download');
         await page.evaluate(bytes=>window.fcInstance.FS.writeFile('/tmp/visible.step',new Uint8Array(bytes)),Array.from(fs.readFileSync(path.join(downloadDir,visibleStep))));
         const visibleInfo=await py("_visible_info","import Part\n_visible_shape=Part.read('/tmp/visible.step')\n_visible_info={'solids':len(_visible_shape.Solids),'volume':_visible_shape.Volume}");
-        assert.equal(visibleInfo.solids,2); near(visibleInfo.volume,48000);
+        assert.equal(visibleInfo.solids,3); near(visibleInfo.volume,48240);
         pass('STEP selection and visibility scopes preserve the intended exact solids');
         // An older recovery copy may be the only copy a user has. Retain it,
         // never reopen it automatically, and let the user explicitly retrieve it.
         const savedBytes=fs.readFileSync(saved);
+        await py('True', "App.ParamGet('User parameter:BaseApp/Preferences/CADFileTest').SetString('PersistProbe','kept')");
+        await page.waitForFunction(()=>!window.__fcPyBusy);
+        await page.evaluate(()=>{
+          Object.defineProperty(document,'hidden',{value:true,configurable:true});
+          document.dispatchEvent(new Event('visibilitychange'));
+          delete document.hidden;
+        });
+        await page.waitForFunction(()=>!window.__fcPyBusy && !window.__cadPrefsPending);
         await page.evaluate(async bytes=>{
           const vfs=window.fcInstance.FS, dir='/home/web_user/.fcweb-autosave';
           vfs.mkdirTree(dir); vfs.writeFile(dir+'/Legacy.FCStd',new Uint8Array(bytes));
@@ -510,6 +534,7 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.equal(await page.evaluate(()=>window.__cadFailed),undefined);
         assert.equal(await py('len(App.listDocuments())'),0,'old CAD files must not restore automatically');
         assert.equal(await py("not hasattr(App,'_fcweb_saver')"),true);
+        assert.equal(await py("App.ParamGet('User parameter:BaseApp/Preferences/CADFileTest').GetString('PersistProbe','')"),'kept','application preferences must persist across reload');
         await click('CAD_Button_legacy_files');
         await page.waitForSelector('#cad-legacy-files p button');
         const legacyRow='#cad-legacy-files [data-legacy-path="/home/web_user/.fcweb-autosave/Legacy.FCStd"]';

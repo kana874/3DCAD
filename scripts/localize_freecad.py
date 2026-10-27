@@ -50,6 +50,36 @@ def localize(page: str) -> str:
         page = page[:pos] + disabled + page[pos + 4:]
         page = page.replace("    document.addEventListener('visibilitychange', function(){ if(document.hidden) runPy(AUTOSAVE_FORCE); });\n", '', 1)
         page = page.replace("    window.addEventListener('pagehide', function(){ runPy(AUTOSAVE_FORCE); });\n", '', 1)
+    # The old autosave loop also saved user preferences and serviced optional
+    # sharing. Keep those independent of document autosave.
+    if disabled in page:
+        keep = '''    // CAD_LOCAL_SETTINGS_ONLY: preserve settings and optional sharing without CAD autosave.
+    var CAD_PREFS = "import FreeCAD as _App\\ntry: _App.saveParameter()\\nexcept Exception: pass\\n";
+    var CAD_SHARE = "try:\\n import fcweb_share as _fs; _fs.tick()\\nexcept Exception: pass\\n";
+    var CAD_MESH = ["import FreeCAD as _App", "if not getattr(_App,'_cad_mesh_observer',None):", " class _CadMeshObserver:", "  def slotChangedObject(self,o,prop=None):", "   try:", "    mesh=getattr(o,'Mesh',None)", "    if prop in (None,'Mesh') and mesh is not None and mesh.CountFacets>50000 and o.ViewObject.SelectionStyle!='BoundBox': o.ViewObject.SelectionStyle='BoundBox'", "   except Exception: pass", " _App._cad_mesh_observer=_CadMeshObserver()", " _App.addDocumentObserver(_App._cad_mesh_observer)", "for _d in _App.listDocuments().values():", " for _o in _d.Objects: _App._cad_mesh_observer.slotChangedObject(_o)"].join("\\n");
+    var CAD_MESH_READY = false;
+    setInterval(function(){ if(window.__fcWorkReady && !window.__fcPyBusy && !CAD_MESH_READY) { CAD_MESH_READY=true; runPy(CAD_MESH); } }, 500);
+    setInterval(function(){ if(window.__fcWorkReady) runPy(CAD_SHARE); }, 1500);
+    function saveCADPreferences(){
+      if (!window.__fcAppReady) { window.__cadPrefsPending=false; return; }
+      if (window.__fcPyBusy) {
+        if (!window.__cadPrefsPending) {
+          window.__cadPrefsPending=true;
+          setTimeout(function(){ window.__cadPrefsPending=false; saveCADPreferences(); }, 200);
+        }
+        return;
+      }
+      window.__cadPrefsPending=false; runPy(CAD_PREFS);
+    }
+    setInterval(saveCADPreferences, 120000);
+    document.addEventListener('visibilitychange', function(){ if(document.hidden) saveCADPreferences(); });
+    window.addEventListener('pagehide', saveCADPreferences);
+'''
+        marker = '    // CAD_LOCAL_SETTINGS_ONLY: preserve settings and optional sharing without CAD autosave.\n'
+        if marker in page:
+            page = re.sub(re.escape(marker) + r'[\s\S]*?(?=' + re.escape(disabled) + ')', lambda _: keep, page, count=1)
+        else:
+            page = page.replace(disabled, keep + disabled, 1)
     page = page.replace("dir='/home/web_user/_dl'", "dir='/tmp/_dl'")
     page = page.replace("var UP='/home/web_user/_up';", "var UP='/tmp/_up';")
     page = page.replace('"    d.saveAs(fp)",', '"    d.saveCopy(fp)",')

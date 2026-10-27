@@ -29,7 +29,14 @@ class Observer:
     removeSelection = changed
     clearSelection = changed
     setSelection = changed
-    slotCreatedDocument = changed
+    def slotCreatedDocument(self, *args):
+        self.changed(*args)
+        # Set immediately: a user can close the page before the next Qt tick.
+        try:
+            with open('/tmp/cad-open-documents', 'w') as marker:
+                marker.write('1')
+        except OSError:
+            pass
     slotDeletedDocument = changed
     slotActivateDocument = changed
     slotCreatedObject = changed
