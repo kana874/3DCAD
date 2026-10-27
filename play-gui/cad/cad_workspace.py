@@ -187,6 +187,15 @@ class Workspace(QtCore.QObject):
             command, sketch_only = self.native_actions[name]
             if sketch_only and not sketch_in_edit(Gui):
                 raise CadError('スケッチを作成・編集してから実行してください。')
+            # A normal Body command completes immediately. Its native Start
+            # Part page is navigation, not a pending edit to embed/lock on.
+            # A selected sketch is different: FreeCAD opens a plane picker
+            # for rebasing it, which still needs the native task controls.
+            if command == 'PartDesign_Body' and not any(
+                    obj.TypeId == 'Sketcher::SketchObject' for obj in Gui.Selection.getSelection()):
+                Gui.runCommand(command)
+                self.home()
+                return
             self.show_native_tasks(sketch=sketch_only)
             Gui.runCommand(command)
         elif name == 'cancel':

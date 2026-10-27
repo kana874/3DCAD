@@ -408,6 +408,8 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.equal(before.length,3);
         for (let i=0;i<2;i++) {
           await runSearch('native_PartDesign_Body');
+          assert.equal(await py('cad_workspace.WORKSPACE.native_task_active'),false,'completed Body command must not leave a locked task');
+          assert.equal((await state()).widgets.CAD_Action_search.enabled,true);
           await press('Escape'); await sleep(600);
         }
         await click('CAD_Action_fit');
