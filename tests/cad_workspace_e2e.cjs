@@ -31,7 +31,7 @@ fs.mkdirSync(output, {recursive: true});
     page.setDefaultTimeout(60000);
     page.on('console', message => log.push(message.text()));
     page.on('pageerror', error => log.push('PAGEERROR: ' + error.message));
-    await page.goto('http://127.0.0.1:18791/?workspace=fusion', {waitUntil: 'domcontentloaded'});
+    await page.goto('http://127.0.0.1:18791/', {waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => window.__cadReady || window.__cadFailed, {timeout: 240000});
     assert.equal(await page.evaluate(() => window.__cadFailed), undefined);
 

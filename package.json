@@ -4,7 +4,7 @@
   "description": "FreeCAD 1.0 compiled to WebAssembly and served in the browser",
   "private": true,
   "scripts": {
-    "test": "python3 -m unittest discover -s tests -v && node tests/test_pages_sw.mjs && node --check play-gui/cad/workspace.js"
+    "test": "python3 -m unittest discover -s tests -v && node tests/test_pages_sw.mjs && node --check play-gui/cad/workspace.js && node tests/test_workspace_boot.mjs"
   },
   "repository": {
     "type": "git",
