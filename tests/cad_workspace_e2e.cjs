@@ -84,6 +84,12 @@ fs.mkdirSync(output, {recursive: true});
       await press('Control+A'); await page.keyboard.type(value); await press('Tab');
       await sleep(250);
     }
+    async function runSearch(name) {
+      await click('CAD_Action_search');
+      await fill('search',name);
+      await click('CAD_Button_search_run');
+      await sleep(600);
+    }
     async function next(name) {
       const widget = (await state()).widgets['CAD_Input_' + name];
       await page.mouse.click(widget.x, widget.y); await press('ArrowDown'); await press('Enter');
@@ -326,12 +332,6 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       if (!['baseline','workflows','regions','sketchtools'].includes(process.env.CAD_TEST_PHASE)) {
       await py('True', "App.newDocument('CatalogCheck')");
       await sleep(600);
-      async function runSearch(name) {
-        await click('CAD_Action_search');
-        await fill('search',name);
-        await click('CAD_Button_search_run');
-        await sleep(600);
-      }
       await runSearch('workbench_SpreadsheetWorkbench');
       assert.ok(await py("'native_Spreadsheet_CreateSheet' in cad_workspace.WORKSPACE.native_actions"));
       await runSearch('native_Spreadsheet_CreateSheet');
