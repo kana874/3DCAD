@@ -23,6 +23,7 @@ jobs:
           docker cp "$cid":/usr/share/nginx/html/. _site/
           cp pages/sw.js pages/coi-boot.js _site/
           python3 tests/occt_wasm_inspect.py _site/FreeCAD.wasm
+          python3 scripts/patch_occt_wasm.py _site/FreeCAD.wasm
           python3 scripts/build_pages.py _site --base /3DCAD/ --version 1.0.8-ja1
       - run: npm ci --ignore-scripts
       - name: Probe curve in isolated browser
