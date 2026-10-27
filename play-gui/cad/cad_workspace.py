@@ -29,8 +29,24 @@ class Observer:
     removeSelection = changed
     clearSelection = changed
     setSelection = changed
-    slotCreatedDocument = changed
-    slotDeletedDocument = changed
+    def slotCreatedDocument(self, *args):
+        self.changed(*args)
+        try:
+            self.workspace.file_tokens.pop(args[0].Name, None)
+        except Exception:
+            self.workspace.file_tokens.clear()
+        # Set immediately: a user can close the page before the next Qt tick.
+        try:
+            with open('/tmp/cad-open-documents', 'w') as marker:
+                marker.write('1')
+        except OSError:
+            pass
+    def slotDeletedDocument(self, *args):
+        self.changed(*args)
+        try:
+            self.workspace.file_tokens.pop(args[0].Name, None)
+        except Exception:
+            self.workspace.file_tokens.clear()
     slotActivateDocument = changed
     slotCreatedObject = changed
     slotDeletedObject = changed
@@ -47,6 +63,9 @@ class Workspace(QtCore.QObject):
         self.main = Gui.getMainWindow()
         super().__init__(self.main)
         self.dirty = True
+        self.file_tokens = {}
+        self.file_token_epoch = str(time.time_ns())
+        self.file_token_counter = 0
         self.native_task_pending = False
         self.native_task_widget = None
         self.native_task_dock = None
@@ -168,6 +187,12 @@ class Workspace(QtCore.QObject):
             Gui.runCommand('Std_DlgPreferences')
         elif name == 'search':
             self.search_panel()
+        elif name in ('save', 'save_as'):
+            self.request_file_operation(name)
+        elif name == 'open':
+            self.request_file_operation('open')
+        elif name == 'export':
+            self.export_panel()
         elif name == 'grid':
             sketch = sketch_in_edit(Gui)
             if sketch and hasattr(sketch.ViewObject, 'ShowGrid'):
@@ -264,6 +289,13 @@ class Workspace(QtCore.QObject):
                 bar.addSeparator()
             for name, title, key in group:
                 bar.addAction(self.action(name, title, key))
+        # Keep normal Save available on the main button; its small menu offers
+        # an explicit new destination without adding another wide toolbar item.
+        save_button = bar.widgetForAction(self.actions['save'])
+        save_menu = QtWidgets.QMenu(save_button)
+        save_menu.addAction(self.action('save_as', '名前を付けて保存'))
+        save_button.setMenu(save_menu)
+        save_button.setPopupMode(QtWidgets.QToolButton.MenuButtonPopup)
         self.action('cancel', 'キャンセル', 'Esc')
         self.bar = bar
 
@@ -482,6 +514,34 @@ class Workspace(QtCore.QObject):
     def value(self, name, positive=True):
         return length(App, self.fields[name].text(), positive)
 
+    def request_file_operation(self, operation, scope='visible'):
+        doc = App.ActiveDocument
+        if operation not in ('open', 'recover') and doc is None:
+            raise CadError('保存する設計がありません。')
+        selected = [o.Name for o in Gui.Selection.getSelection() if o.Document == doc] if doc else []
+        if operation == 'step' and scope == 'selected' and not selected:
+            raise CadError('書き出すボディを選択してください。')
+        request = {'operation': operation, 'document': doc.Name if doc else None,
+                   'token': self.file_token(doc) if doc else None,
+                   'label': doc.Label if doc else '', 'scope': scope, 'selected': selected}
+        with open('/tmp/cad-file-request.json', 'w', encoding='utf-8') as out:
+            json.dump(request, out, ensure_ascii=False)
+        self.status('ブラウザのファイル操作を続けてください。')
+
+    def file_token(self, doc):
+        if doc.Name not in self.file_tokens:
+            self.file_token_counter += 1
+            self.file_tokens[doc.Name] = self.file_token_epoch + '-' + str(self.file_token_counter)
+        return self.file_tokens[doc.Name]
+
+    def export_panel(self):
+        self.clear_panel('STEPを書き出し')
+        self.combo('export_scope', '対象', [('表示中のボディ', 'visible'),
+                   ('選択したボディ', 'selected'), ('すべてのボディ', 'all')])
+        self.button('STEPとして保存', lambda: self.request_file_operation(
+            'step', self.fields['export_scope'].currentData()), 'export_step')
+        self.button('キャンセル', self.home, 'export_cancel')
+
     def home(self):
         self.close_plane_picker()
         self.current_command = None
@@ -494,6 +554,26 @@ class Workspace(QtCore.QObject):
         self.button('スケッチを作成', self.sketch_panel, 'create_sketch')
         self.button('ブラウザを表示', self.tree_dock.show, 'show_browser')
         self.button('履歴を表示', self.history_dock.show, 'show_history')
+        # Existing browser recovery copies remain available for explicit local
+        # retrieval, but are never opened or deleted automatically.
+        try:
+            import os
+            extensions = ('.fcstd', '.step', '.stp', '.iges', '.igs', '.brep', '.brp',
+                          '.stl', '.obj', '.ply', '.3mf', '.ifc', '.dxf')
+            roots = ('/home/web_user/.fcweb-autosave', '/home/web_user/_up', '/home/web_user/_dl')
+            found = any(name.lower().endswith(extensions) for name in os.listdir('/home/web_user'))
+            for old in roots:
+                if found:
+                    break
+                for _, _, files in os.walk(old):
+                    if any(name.lower().endswith(extensions) for name in files):
+                        found = True
+                        break
+            if found:
+                self.button('以前のブラウザ保存データを取り出す',
+                            lambda: self.request_file_operation('recover'), 'legacy_files')
+        except OSError:
+            pass
         self.editing = False
 
     def face_selection(self):
@@ -1147,6 +1227,18 @@ class Workspace(QtCore.QObject):
     def sync(self):
         self.dirty = False
         doc = App.ActiveDocument
+        # Browser close/reload must not silently discard an open design now
+        # that CAD autosave is disabled. The marker is session-only MEMFS.
+        try:
+            if App.listDocuments():
+                with open('/tmp/cad-open-documents', 'w') as marker:
+                    marker.write('1')
+            else:
+                import os
+                if os.path.exists('/tmp/cad-open-documents'):
+                    os.remove('/tmp/cad-open-documents')
+        except OSError:
+            pass
         edit = sketch_in_edit(Gui)
         locked = self.session is not None or (self.native_task_active and not self.native_task_sketch)
         is_3d = bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph'))
@@ -1160,7 +1252,7 @@ class Workspace(QtCore.QObject):
             self.actions[name].setEnabled(not locked and bool(edit if sketch_only else doc))
         for name in ('rectangle_center_exact', 'rectangle_three_points', 'circle_two_points', 'sketch_settings'):
             self.actions[name].setEnabled(bool(edit) and not locked)
-        for name in ('save', 'export'):
+        for name in ('save', 'save_as', 'export'):
             self.actions[name].setEnabled(bool(doc) and not locked)
         for name in ('extrude', 'fillet', 'chamfer', 'fit', 'grid'):
             self.actions[name].setEnabled(is_3d and not locked)

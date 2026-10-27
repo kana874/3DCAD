@@ -1552,8 +1552,7 @@ window.fcwebNotify = function (text, kind, actions, opts) {
                 : 'other';
       if (klass) { window.fcwebEvent && window.fcwebEvent('crash', klass); }
     } catch (e) { /* a counter must never break the crash path it reports on */ }
-    var text = 'Something went wrong (' + kind + '). Your work is autosaved and will be ' +
-               'restored if you reload. If it keeps happening, please send us the report.';
+    var text = 'Something went wrong (' + kind + '). Unsaved work is not restored automatically. Save a local copy if possible.';
     if (typeof window.fcwebNotify !== 'function') { try { console.error(text, detail); } catch (e) {} return; }
     window.fcwebNotify(text, 'error', [
       { label: 'Copy report', onClick: function (btn) {
@@ -2662,7 +2661,7 @@ window.fcwebNotify = function (text, kind, actions, opts) {
    [/Cannot enlarge memory|OOM|out of memory|Aborted\(OOM\)|memory allocation failed/i,
     'This model needs more memory than the browser build has (the limit is 16 GB). ' +
     'Try simplifying it, meshing more coarsely, or closing other documents. ' +
-    'Your open work has been autosaved.'],
+    'Save your open work locally before reloading.'],
    // pre-gui.js emits this when FS.syncfs fails -- browser storage full, evicted, or
    // blocked. Autosave is writing into a void from this point on.
    [/IDBFS persist failed|QuotaExceeded/i,
@@ -3317,7 +3316,7 @@ window.fcRunPy = fcRunPy;
            if (/memory|OOM/i.test(String(w))) {
              window.fcwebNotify && window.fcwebNotify(
                'Out of memory: this model is larger than the browser build can hold ' +
-               '(4 GB limit). Your work has been autosaved — reload to get it back.', 'error');
+               '(4 GB limit). Unsaved work is not restored automatically.', 'error');
            } else if (window.fcwebCrash) { window.fcwebCrash('wasm abort', w); }
            // Only the KIND, never the message -- an abort string can contain paths.
            try { window.fcwebEvent('abort', /memory|OOM/i.test(String(w)) ? 'oom' : 'other'); } catch(e){}
@@ -4142,7 +4141,6 @@ window.fcRunPy = fcRunPy;
       } catch (e) {}
     }
     function checkMemoryPressure(){
-      checkAutosaveHealth();
       var f = heapUsedFraction();
       if (f < 0) return;
       var capMB = heapCapMB();
@@ -4150,18 +4148,16 @@ window.fcRunPy = fcRunPy;
       var capGB = (capMB / 1024).toFixed(capMB % 1024 ? 1 : 0);
       if (f >= memCritAt() && __memState < 2) {
         __memState = 2;
-        try { py(AUTOSAVE_FORCE); } catch (e) {}
         if (typeof window.fcwebNotify === 'function') {
           window.fcwebNotify('Memory is nearly full (' + mb + ' MB of ' + capMB + ' MB). Your work has '
-            + 'been saved. Save a copy with File \u2192 Save and close documents you are not '
+            + 'not been saved automatically. Save a copy with File \u2192 Save and close documents you are not '
             + 'using -- the browser build cannot grow past ' + capGB + ' GB.', 'warn');
         }
       } else if (f >= memWarnAt() && __memState < 1) {
         __memState = 1;
-        try { py(AUTOSAVE_FORCE); } catch (e) {}
         if (typeof window.fcwebNotify === 'function') {
           window.fcwebNotify('This model is using ' + mb + ' MB of the ' + capGB + ' GB the browser build '
-            + 'has. Your work has been saved. Consider simplifying it or closing documents you '
+            + 'has. Save a local copy and consider simplifying it or closing documents you '
             + 'are not using.', 'warn');
         }
       } else if (f < memWarnAt() - 0.05) {
@@ -4192,7 +4188,29 @@ window.fcRunPy = fcRunPy;
     // exists, and on a cold first load (empty HTTP cache) it does not by 11 s -- the
     // observer was never installed, so nothing was ever saved, and the work of a user's
     // very first session was the one thing guaranteed to be lost.
-    (function(){
+    // CAD_LOCAL_SETTINGS_ONLY: preserve settings and optional sharing without CAD autosave.
+    var CAD_PREFS = "import FreeCAD as _App\ntry: _App.saveParameter()\nexcept Exception: pass\n";
+    var CAD_SHARE = "try:\n import fcweb_share as _fs; _fs.tick()\nexcept Exception: pass\n";
+    var CAD_MESH = ["import FreeCAD as _App", "if not getattr(_App,'_cad_mesh_observer',None):", " class _CadMeshObserver:", "  def slotChangedObject(self,o,prop=None):", "   try:", "    mesh=getattr(o,'Mesh',None)", "    if prop in (None,'Mesh') and mesh is not None and mesh.CountFacets>50000 and o.ViewObject.SelectionStyle!='BoundBox': o.ViewObject.SelectionStyle='BoundBox'", "   except Exception: pass", " _App._cad_mesh_observer=_CadMeshObserver()", " _App.addDocumentObserver(_App._cad_mesh_observer)", "for _d in _App.listDocuments().values():", " for _o in _d.Objects: _App._cad_mesh_observer.slotChangedObject(_o)"].join("\n");
+    var CAD_MESH_READY = false;
+    setInterval(function(){ if(window.__fcWorkReady && !window.__fcPyBusy && !CAD_MESH_READY) { CAD_MESH_READY=true; runPy(CAD_MESH); } }, 500);
+    setInterval(function(){ if(window.__fcWorkReady) runPy(CAD_SHARE); }, 1500);
+    function saveCADPreferences(){
+      if (!window.__fcAppReady) { window.__cadPrefsPending=false; return; }
+      if (window.__fcPyBusy) {
+        if (!window.__cadPrefsPending) {
+          window.__cadPrefsPending=true;
+          setTimeout(function(){ window.__cadPrefsPending=false; saveCADPreferences(); }, 200);
+        }
+        return;
+      }
+      window.__cadPrefsPending=false; runPy(CAD_PREFS);
+    }
+    setInterval(saveCADPreferences, 120000);
+    document.addEventListener('visibilitychange', function(){ if(document.hidden) saveCADPreferences(); });
+    window.addEventListener('pagehide', saveCADPreferences);
+    // CAD_LOCAL_FILES: browser CAD autosave and restore disabled.
+    if (false) (function(){
       var installed = false, restored = false;
       function ready(){
         var m = window.fcInstance;
@@ -4248,8 +4266,6 @@ window.fcRunPy = fcRunPy;
       }, 1000);
     })();
     // Closing or hiding the tab: force a save. pagehide is the one that fires on reload.
-    document.addEventListener('visibilitychange', function(){ if(document.hidden) runPy(AUTOSAVE_FORCE); });
-    window.addEventListener('pagehide', function(){ runPy(AUTOSAVE_FORCE); });
     // Overlay state. These belong WITH the three functions below.
     //
     // They used to be declared inside the compositor IIFE further up, which closes at
@@ -6175,7 +6191,7 @@ window.fcRunPy = fcRunPy;
       var text = (reason && reason.trim())
         || 'An addon is installed. Reload to finish enabling it.';
       if (typeof window.fcwebNotify !== 'function') { return; }
-      window.fcwebNotify(text + ' Your work is autosaved.', 'info', [
+      window.fcwebNotify(text + ' Save your work locally before reloading.', 'info', [
         { label: 'Reload now', onClick: function () { location.reload(); } },
         { label: 'Later', onClick: function (b) {
             // Let a second install re-offer it rather than going quiet for the session.
@@ -6191,7 +6207,7 @@ window.fcRunPy = fcRunPy;
 
   async function download(){
     if(!ready()){ return; }
-    var m=window.fcInstance, FS=m.FS, dir='/home/web_user/_dl';
+    var m=window.fcInstance, FS=m.FS, dir='/tmp/_dl';
     try{ FS.mkdirTree ? FS.mkdirTree(dir) : FS.mkdir(dir); }catch(e){}
     try{ FS.unlink(dir+'/done'); }catch(e){}
     py([
@@ -6205,7 +6221,7 @@ window.fcRunPy = fcRunPy;
       "  else:",
       "    lbl=''.join(c for c in (d.Label or 'document') if c.isalnum() or c in '-_ ').strip() or 'document'",
       "    fp=os.path.join(o, lbl+'.FCStd')",
-      "    d.saveAs(fp)",
+      "    d.saveCopy(fp)",
       "    open(os.path.join(o,'name'),'w').write(lbl+'.FCStd')",
       "except Exception as e: err=str(e)",
       "open(os.path.join(o,'done'),'w').write(err)"
@@ -6229,7 +6245,7 @@ window.fcRunPy = fcRunPy;
       try{ FS.unlink(dir+'/done'); }catch(e){}
       // They have just saved real work: the one moment the install offer is concretely
       // about something they would mind losing.
-      try{ window.__fcWorkSaved && window.__fcWorkSaved(); }catch(e){}
+
       // ...and the same for the server copy. Ctrl+S and the File > Save button land HERE,
       // not in the save watcher: that one only sees Save As / Export, which go through
       // FreeCAD's getSaveFileName and are announced by registerSave(). Plain Save writes to
@@ -6238,7 +6254,7 @@ window.fcRunPy = fcRunPy;
       // As then kept serving its older copy no matter how often it was saved. The bytes are
       // in hand and the staged copy is already unlinked above, so this passes them
       // directly rather than re-reading a file that is gone.
-      try{ if(window.fcwebServerFiles){ window.fcwebServerFiles.onSave && window.fcwebServerFiles.onSave(dir+'/'+name, bytes); } }catch(e){}
+
       return;
     }
     alert('Save timed out');
@@ -6267,7 +6283,7 @@ window.fcRunPy = fcRunPy;
   // and a file's folder path is preserved when the browser gives us one
   // (webkitRelativePath, set when a directory was chosen), which is what makes the
   // children land where the master expects them.
-  var UP='/home/web_user/_up';
+  var UP='/tmp/_up';
   // Per segment, the same character class the single-file path always used. '..' and
   // absolute paths cannot survive it, so a crafted archive cannot escape the staging dir.
   function safeRel(rel){
@@ -7023,7 +7039,7 @@ window.fcRunPy = fcRunPy;
           var bytes; try{ bytes=FS.readFile(p); }catch(e){ return; }
           if(bytes.length!==size) { pendingSaves[p]=null; return; } // mid-write; retry next tick
           // The user has saved real work through File > Save / Save As / Export.
-          try{ window.__fcWorkSaved && window.__fcWorkSaved(); }catch(e){}
+
           // Server copy, if THIS browser asked for one. It is a copy, not a move: the
           // download and the OS-file write below still happen, so turning the feature off
           // loses nothing and the browser stays the primary home.
@@ -7174,7 +7190,7 @@ window.fcRunPy = fcRunPy;
   // Ctrl+S / Ctrl+O convenience -> same bridge (capture phase so a stray native dialog never runs)
   window.addEventListener('keydown',function(e){
     var k=(e.key||'').toLowerCase();
-    if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); download(); }
+    if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); (window.__cadSaveRequest||download)(e.shiftKey); }
     else if((e.metaKey||e.ctrlKey)&&k==='o'){ e.preventDefault(); e.stopImmediatePropagation(); openFile(); }
     else if(k==='escape'){ closeActivePopup(); }
   },true);

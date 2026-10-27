@@ -21,6 +21,7 @@ on:
       - tests/test_cad_workspace.py
       - tests/cad_workspace_e2e.cjs
       - tests/test_workspace_boot.mjs
+      - tests/test_file_bridge.mjs
       - tests/serve_cad_fixture.py
       - tests/test_ja_runtime.py
       - tests/test_pages_sw.mjs
@@ -53,6 +54,8 @@ jobs:
         run: node tests/test_pages_sw.mjs
       - name: Verify workspace boot ownership
         run: node tests/test_workspace_boot.mjs
+      - name: Verify browser file picker handling
+        run: node tests/test_file_bridge.mjs
       - name: Verify Python bridge failure reporting
         run: node tests/test_python_bridge.mjs
       - name: Check Fusion modeling palette JavaScript syntax

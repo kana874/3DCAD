@@ -58,5 +58,16 @@ class JapaneseLocalizationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'fundraising'):
             module.localize(BASE.replace('</body>', '<button>Support on Patreon</button></body>'))
 
+    def test_cad_files_are_staged_in_memory_and_recovery_is_disabled(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        result = module.localize((root / 'play-gui/freecad-gui.html').read_text(encoding='utf-8'))
+        self.assertIn('CAD_LOCAL_FILES: browser CAD autosave and restore disabled.', result)
+        self.assertIn('if (false) (function(){', result)
+        self.assertIn("var UP='/tmp/_up'", result)
+        self.assertIn("dir='/tmp/_dl'", result)
+        self.assertIn('d.saveCopy(fp)', result)
+        self.assertNotIn("window.addEventListener('pagehide', function(){ runPy(AUTOSAVE_FORCE); });", result)
+        self.assertNotIn('Your work has been autosaved — reload', result)
+
 if __name__ == "__main__":
     unittest.main()
