@@ -366,12 +366,14 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         await sleep(100);
       }
       assert.deepEqual(methodState,[2,true],'construction mode must be selected before drawing');
+      console.log('CONSTRUCTION_STATE',await py("{'combos':[(b.objectName(),b.currentIndex(),[b.itemText(i) for i in range(b.count())]) for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QComboBox) if b.isVisible()], 'checks':[(b.text(),b.isChecked()) for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QCheckBox) if b.isVisible()], 'activeWindow':Gui.getMainWindow().findChild(QtWidgets.QMdiArea).activeSubWindow().windowTitle()}",'from PySide6 import QtWidgets'));
       async function sketchPoint(p, clickPoint=true) {
         const xy = await py("(lambda w,p:[w.mapToGlobal(QtCore.QPoint(0,0)).x()+p[0],w.mapToGlobal(QtCore.QPoint(0,0)).y()+w.height()-1-p[1]])(next(w for w in Gui.getMainWindow().findChild(QtWidgets.QMdiArea).activeSubWindow().findChildren(QtWidgets.QWidget) if w.metaObject().className()=='Gui::View3DInventorViewer'),Gui.activeDocument().activeView().getPointOnScreen(App.Vector("+p.join(',')+")))",'from PySide6 import QtCore,QtWidgets');
         await page.mouse.move(...xy);
         await sleep(120); // Let Qt process motion before the separate button events.
         if (clickPoint) { await page.mouse.down(); await sleep(40); await page.mouse.up(); }
         await sleep(250);
+        console.log('DRAW_POINT',p,xy,await py("{'size':Gui.activeDocument().activeView().getSize(),'geometry':cad_workspace.sketch_in_edit(Gui).GeometryCount,'hint':Gui.getMainWindow().statusBar().currentMessage(),'focus':QtWidgets.QApplication.focusWidget().metaObject().className() if QtWidgets.QApplication.focusWidget() else None,'quantities':[(b.objectName(),b.text()) for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QWidget) if b.isVisible() and b.metaObject().className()=='Gui::QuantitySpinBox']}",'from PySide6 import QtWidgets'),await page.evaluate(([x,y])=>document.elementsFromPoint(x,y).slice(0,4).map(e=>({tag:e.tagName,id:e.id,classes:String(e.className)})),xy));
         return xy;
       }
       for (const p of [[-20,-10,0],[-5,-5,0],[-7,5,0]]) await sketchPoint(p);
