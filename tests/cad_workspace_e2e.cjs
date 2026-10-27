@@ -138,11 +138,12 @@ fs.mkdirSync(output, {recursive: true});
       pass('numeric sketch -> E -> Pad: 15000 mm3');
       await sleep(900);
 
-      // Pick a real rendered face, not a programmatic selection.
-      await page.mouse.click(810, 420); await sleep(400);
-      const picked = await py('[(s.Object.Name,list(s.SubElementNames)) for s in Gui.Selection.getSelectionEx()]');
-      assert.ok(picked.some(item => item[1].some(name => name.startsWith('Face'))), JSON.stringify(picked));
+      // Start the command first, then pick a real rendered body face. The
+      // selected face should immediately become the sketch support.
       await click('CAD_Action_sketch');
+      await page.mouse.click(810, 420); await sleep(700);
+      assert.ok(await py("bool(cad_workspace.sketch_in_edit(Gui))"), 'face selection should start sketch editing');
+      assert.ok(await py("bool(cad_workspace.sketch_in_edit(Gui).AttachmentSupport)"), 'the sketch must be attached to the selected face');
       await click('CAD_Button_circle_exact');
       await fill('x', '25 mm'); await fill('y', '15 mm'); await fill('diameter', '10 mm');
       await click('CAD_Button_add_geometry');

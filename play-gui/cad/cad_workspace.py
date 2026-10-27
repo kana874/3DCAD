@@ -1198,6 +1198,14 @@ class Workspace(QtCore.QObject):
             if self.plane_picker and (not Gui.activeDocument() or self.plane_picker.view != Gui.activeDocument().activeView()):
                 self.close_plane_picker()
                 self.current_command = None
+            # Native selection is delivered after the mouse event. Defer the
+            # transition to this timer rather than mutating the scene from a
+            # Coin selection callback while it is traversing that scene.
+            if self.plane_picker and self.current_command == 'plane_select':
+                face = self.face_selection()
+                if face:
+                    self.safe(partial(self.start_sketch, face=face))
+                    return
             editing_native = bool(Gui.activeDocument() and Gui.activeDocument().getInEdit())
             task_buttons = self.native_task_widget and any(box.isVisible() for box in self.native_task_widget.findChildren(QtWidgets.QDialogButtonBox))
             if self.native_task_active and not self.native_task_pending and not Gui.Control.activeDialog() and not editing_native and not task_buttons:
