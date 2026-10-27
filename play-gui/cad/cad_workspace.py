@@ -72,6 +72,7 @@ class Workspace(QtCore.QObject):
         self.native_actions = {}
         self.region_picker = None
         self.plane_picker = None
+        self.arrow_handle = None
         self.reference_scene = None
         self.reference_root = None
         self.grid_visible = True
@@ -874,6 +875,7 @@ class Workspace(QtCore.QObject):
             self.session.update(*self.extrusion_values())
             self.preview_ok = True
             self.accept_button.setEnabled(True)
+            self.update_extrusion_arrow()
             self.status('プレビューを確認してOKを押してください。Escで元に戻します。')
         except Exception as error:
             self.preview_ok = False
@@ -896,11 +898,13 @@ class Workspace(QtCore.QObject):
         except Exception:
             if self.session.closed:
                 self.close_region_picker()
+                self.close_extrusion_arrow()
                 self.session = None
                 self.home()
             raise
         self.session = None
         self.close_region_picker()
+        self.close_extrusion_arrow()
         Gui.Selection.clearSelection()
         if first_solid:
             QtCore.QTimer.singleShot(300, lambda: self.fit_view() if Gui.activeDocument() else None)
@@ -910,6 +914,7 @@ class Workspace(QtCore.QObject):
     def cancel(self):
         self.close_region_picker()
         self.close_plane_picker()
+        self.close_extrusion_arrow()
         self.preview_timer.stop()
         if self.session:
             self.session.cancel()
@@ -922,6 +927,42 @@ class Workspace(QtCore.QObject):
             self.sketch_home()
         else:
             self.home()
+
+    def close_extrusion_arrow(self):
+        if self.arrow_handle:
+            self.arrow_handle.hide()
+            self.arrow_handle.deleteLater()
+            self.arrow_handle = None
+
+    def update_extrusion_arrow(self):
+        from cad_arrow import ExtrusionArrow
+        session = self.session
+        if not session or getattr(session, 'editing_profile', False):
+            return
+        if hasattr(session, 'face_name'):
+            from cad_face import selected_face
+            face = selected_face(session.previous, session.face_name)
+            center, normal = face.CenterOfMass, face.normalAt(0, 0)
+        else:
+            candidates = dict(session.region_candidates or [])
+            faces = [candidates[key] for key in session.region_keys or [] if key in candidates]
+            if not faces:
+                self.close_extrusion_arrow()
+                return
+            local_center = sum((face.CenterOfMass for face in faces), App.Vector()) * (1.0 / len(faces))
+            center = session.sketch.Placement.multVec(local_center)
+            normal = session.sketch.Placement.Rotation.multVec(App.Vector(0, 0, 1))
+        view = Gui.activeDocument().activeView()
+        mdi = self.main.findChild(QtWidgets.QMdiArea)
+        active = mdi.activeSubWindow() if mdi else None
+        viewer = next((w for w in active.findChildren(QtWidgets.QWidget) if w.metaObject().className() == 'Gui::View3DInventorViewer'), None) if active else None
+        if viewer is None:
+            return
+        if self.arrow_handle and self.arrow_handle.viewer != viewer:
+            self.close_extrusion_arrow()
+        if not self.arrow_handle:
+            self.arrow_handle = ExtrusionArrow(self, view, viewer)
+        self.arrow_handle.set_axis(center, normal)
 
     def edit_item(self, item):
         if self.session:
@@ -1278,6 +1319,8 @@ class Workspace(QtCore.QObject):
                 self.sketch_home(edit) if edit else self.home()
             self.update_theme()
             self.update_references()
+            if self.arrow_handle:
+                self.arrow_handle.reposition()
             signature = (doc.Name if doc else None, edit.Name if edit else None,
                          bool(Gui.activeDocument() and Gui.activeDocument().getInEdit()),
                          bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph')))
@@ -1464,6 +1507,8 @@ class Workspace(QtCore.QObject):
         WORKSPACE = None
 
     def eventFilter(self, watched, event):
+        if self.arrow_handle and watched == self.arrow_handle and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease, QtCore.QEvent.MouseMove):
+            return False
         if event.type() == QtCore.QEvent.MouseButtonRelease and hasattr(self, 'history') and watched == self.history.viewport():
             self.history_event_time = event.timestamp() or None
         if event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease) and event.button() == QtCore.Qt.LeftButton:

@@ -93,6 +93,7 @@ jobs:
           test -s _site/cad/cad_selection.py
           test -s _site/cad/cad_profiles.py
           test -s _site/cad/cad_face.py
+          test -s _site/cad/cad_arrow.py
           test -s _site/cad/cad_commands.py
           test -s _site/cad/cad_catalog.py
           grep -q '/cad/workspace.js' _site/index.html
