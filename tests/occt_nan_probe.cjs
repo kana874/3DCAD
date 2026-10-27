@@ -50,7 +50,7 @@ fs.mkdirSync(output, {recursive: true});
       await page.evaluate(({code,name}) => {
         const vfs=window.fcInstance.FS, marker='/tmp/occt-probe-'+name;
         try { vfs.unlink(marker); } catch (_) {}
-        const source="import Part, FreeCAD as App, traceback\ntry:\n "+code+"\n open('"+marker+"','w').write('OK')\nexcept Exception:\n open('"+marker+"','w').write(traceback.format_exc())\n";
+        const source="import Part, FreeCAD as App, traceback\ntry:\n "+code+"\n open('"+marker+"','w').write(repr(_e))\nexcept Exception:\n open('"+marker+"','w').write(traceback.format_exc())\n";
         window.__fcRunPyGuarded(source);
       },{code,name});
       await page.waitForFunction(name => {
@@ -65,8 +65,7 @@ fs.mkdirSync(output, {recursive: true});
       console.log('OCCT_PROBE', name, JSON.stringify(result));
       return result;
     }
-    await probe('valid', "_e=Part.LineSegment(App.Vector(0,0,0),App.Vector(1,0,0)).toShape(0.0,1.0)");
-    await probe('nan', "_e=Part.LineSegment(App.Vector(float('nan'),0,0),App.Vector(1,0,0))");
+    await probe('api', "_e=[(n,str(getattr(Part,n).__doc__)[:1000]) for n in dir(Part) if 'Trim' in n or 'ArcOf' in n or n in ('Line','LineSegment','Parabola','Hyperbola')]");
   } finally {
     if (browser) await browser.close();
     server.kill();
