@@ -20,6 +20,7 @@ on:
       - tests/test_fusion_design.py
       - tests/test_cad_workspace.py
       - tests/cad_workspace_e2e.cjs
+      - tests/test_workspace_boot.mjs
       - tests/serve_cad_fixture.py
       - tests/test_ja_runtime.py
       - tests/test_pages_sw.mjs
@@ -50,6 +51,8 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_cad_workspace.py' -v
       - name: Verify Service Worker fallback with a real gzip WASM stream
         run: node tests/test_pages_sw.mjs
+      - name: Verify workspace boot ownership
+        run: node tests/test_workspace_boot.mjs
       - name: Check Fusion modeling palette JavaScript syntax
         run: |
           node --check play-gui/fusion/design-palette.js

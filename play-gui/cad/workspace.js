@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
-// Explicit opt-in until the real-engine workflow passes the acceptance suite.
+// Dedicated GUI is the default; the legacy shell is an explicit compatibility path.
 (() => {
   'use strict';
   const query = new URLSearchParams(location.search);
-  if (query.get('workspace') !== 'fusion' || query.get('fusionMode') === 'off') return;
+  if (query.get('workspace') === 'classic' || query.get('fusionMode') === 'off') return;
   const base = new URL('./', document.currentScript.src);
   const files = ['cad_core.py', 'cad_selection.py', 'cad_profiles.py', 'cad_commands.py', 'cad_catalog.py', 'cad_workspace.py'];
   const directory = '/home/web_user/.cad-workspace';
@@ -69,8 +69,8 @@
     notice.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:3000000;background:#fff1e9;color:#7c2923;padding:12px';
     notice.textContent = `専用ワークスペースを起動できませんでした：${message} `;
     const link = document.createElement('a');
-    const recovery = new URL(location.href); recovery.searchParams.delete('workspace');
-    link.href = recovery.href; link.textContent = '通常版へ戻る';
+    const recovery = new URL(location.href); recovery.searchParams.set('workspace', 'classic');
+    link.href = recovery.href; link.textContent = '互換モードを開く';
     notice.append(link); document.body.append(notice);
   }
 })();
