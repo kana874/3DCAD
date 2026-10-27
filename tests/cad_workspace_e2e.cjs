@@ -127,6 +127,7 @@ fs.mkdirSync(output, {recursive: true});
       await click('CAD_Button_create_sketch');
       await click('CAD_Button_start_sketch');
       assert.equal(await py('cad_workspace.WORKSPACE.mode_tabs.currentIndex()'),1,'entering sketch edit selects the sketch tab');
+      assert.equal(await py("cad_workspace.WORKSPACE.actions['line'].isVisible() and not cad_workspace.WORKSPACE.actions['sketch'].isVisible()"),true,'only sketch controls should be visible');
       const tabs=await py("[(lambda p:[p.x(),p.y()])(cad_workspace.WORKSPACE.mode_tabs.mapToGlobal(cad_workspace.WORKSPACE.mode_tabs.tabRect(i).center())) for i in (0,1)]");
       await page.mouse.click(...tabs[0]); await sleep(350);
       assert.equal(await py('cad_workspace.WORKSPACE.mode_tabs.currentIndex()'),0);
@@ -141,6 +142,7 @@ fs.mkdirSync(output, {recursive: true});
       assert.equal((await state()).session, 'extrude', 'E must route to the dedicated command');
       await click('CAD_Button_accept');
       assert.equal(await py('cad_workspace.WORKSPACE.mode_tabs.currentIndex()'),0,'finishing the sketch returns to the solid tab');
+      assert.equal(await py("cad_workspace.WORKSPACE.actions['sketch'].isVisible() and not cad_workspace.WORKSPACE.actions['line'].isVisible()"),true,'only solid controls should be visible');
       model = await state();
       near(model.features.find(o => o.type === 'PartDesign::Pad').volume, 15000);
       pass('numeric sketch -> E -> Pad: 15000 mm3');
@@ -569,6 +571,13 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.equal(await py("App.ParamGet('User parameter:BaseApp/Preferences/CADFileTest').GetString('PersistProbe','')"),'kept','application preferences must persist across reload');
         await click('CAD_Button_legacy_files');
         await sleep(1000);
+        // Qt/WASM can need a first click to activate the freshly reloaded
+        // canvas. Retry the actual visible button once, then require the full
+        // recovery, download and per-file deletion checks below.
+        if (!await page.$('#cad-legacy-files')) {
+          await click('CAD_Button_legacy_files');
+          await sleep(1000);
+        }
         console.log('LEGACY_DIAG', JSON.stringify(await page.evaluate(() => {
           const f=window.fcInstance.FS;
           return {panel:document.querySelector('#cad-legacy-files')?.outerHTML,

@@ -298,9 +298,9 @@ class Workspace(QtCore.QObject):
                 action = self.action(name, title, key)
                 bar.addAction(action)
                 if name in ('sketch', 'extrude', 'fillet', 'chamfer'):
-                    self.mode_widgets['solid'].append(bar.widgetForAction(action))
+                    self.mode_widgets['solid'].append(action)
                 elif name in ('finish', 'line', 'rectangle', 'circle', 'dimension', 'trim', 'construction'):
-                    self.mode_widgets['sketch'].append(bar.widgetForAction(action))
+                    self.mode_widgets['sketch'].append(action)
         # Keep normal Save available on the main button; its small menu offers
         # an explicit new destination without adding another wide toolbar item.
         save_button = bar.widgetForAction(self.actions['save'])
@@ -315,9 +315,9 @@ class Workspace(QtCore.QObject):
     def apply_mode_tab(self, *_):
         mode = 'sketch' if self.mode_tabs.currentIndex() == 1 else 'solid'
         for group, widgets in self.mode_widgets.items():
-            for widget in widgets:
-                if widget:
-                    widget.setVisible(group == mode)
+            for action in widgets:
+                if action:
+                    action.setVisible(group == mode)
 
     def build_command_menus(self):
         from cad_commands import SKETCH_TOOLS
@@ -335,9 +335,9 @@ class Workspace(QtCore.QObject):
             button.setText(title)
             button.setMenu(menu)
             button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
-            self.bar.addWidget(button)
+            button_action = self.bar.addWidget(button)
             if mode:
-                self.mode_widgets[mode].append(button)
+                self.mode_widgets[mode].append(button_action)
         sketch = QtWidgets.QMenu('作図', self.bar)
         for title, commands in SKETCH_TOOLS:
             submenu = sketch.addMenu(title)
