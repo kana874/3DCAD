@@ -492,7 +492,7 @@ class Workspace(QtCore.QObject):
         doc = App.ActiveDocument
         if operation != 'open' and doc is None:
             raise CadError('保存する設計がありません。')
-        selected = [o.Name for o in Gui.Selection.getSelection()] if doc else []
+        selected = [o.Name for o in Gui.Selection.getSelection() if o.Document == doc] if doc else []
         if operation == 'step' and scope == 'selected' and not selected:
             raise CadError('書き出すボディを選択してください。')
         request = {'operation': operation, 'document': doc.Name if doc else None,
