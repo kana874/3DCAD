@@ -461,14 +461,47 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.equal(info.solids,3);
         near(info.volume,72000);
         pass('STEP export -> browser download -> read back three exact solids');
+        const bodyPoint=await py("(lambda w,i:[w.tree.viewport().mapToGlobal(w.tree.visualItemRect(i).center()).x(),w.tree.viewport().mapToGlobal(w.tree.visualItemRect(i).center()).y()])(cad_workspace.WORKSPACE,cad_workspace.WORKSPACE.tree_items['Body'])");
+        await page.mouse.click(...bodyPoint); await sleep(400);
+        assert.ok(await py("any(o.Name=='Body' for o in Gui.Selection.getSelection())"),'body selected through browser tree');
+        const beforeSelected=new Set(fs.readdirSync(downloadDir));
+        await click('CAD_Action_export'); await next('export_scope'); await click('CAD_Button_export_step');
+        let selectedStep;
+        for (let i=0;i<600;i++) {
+          selectedStep=fs.readdirSync(downloadDir).find(n=>n.toLowerCase().endsWith('.step')&&!beforeSelected.has(n));
+          if (selectedStep && !fs.readdirSync(downloadDir).some(n=>n.endsWith('.crdownload'))) break;
+          await sleep(100);
+        }
+        assert.ok(selectedStep,'selected-body STEP must download');
+        await page.evaluate(bytes=>window.fcInstance.FS.writeFile('/tmp/selected.step',new Uint8Array(bytes)),Array.from(fs.readFileSync(path.join(downloadDir,selectedStep))));
+        const selectedInfo=await py("_selected_info","import Part\n_selected_shape=Part.read('/tmp/selected.step')\n_selected_info={'solids':len(_selected_shape.Solids),'volume':_selected_shape.Volume}");
+        assert.equal(selectedInfo.solids,1); near(selectedInfo.volume,24000);
+        await py('True',"_bodies=[o for o in App.ActiveDocument.findObjects('PartDesign::Body') if not o.Shape.isNull()]\n[o.ViewObject.show() for o in _bodies]\n_bodies[1].ViewObject.hide()");
+        await sleep(500);
+        const beforeVisible=new Set(fs.readdirSync(downloadDir));
+        await click('CAD_Action_export'); await click('CAD_Button_export_step');
+        let visibleStep;
+        for (let i=0;i<600;i++) {
+          visibleStep=fs.readdirSync(downloadDir).find(n=>n.toLowerCase().endsWith('.step')&&!beforeVisible.has(n));
+          if (visibleStep && !fs.readdirSync(downloadDir).some(n=>n.endsWith('.crdownload'))) break;
+          await sleep(100);
+        }
+        assert.ok(visibleStep,'visible-body STEP must download');
+        await page.evaluate(bytes=>window.fcInstance.FS.writeFile('/tmp/visible.step',new Uint8Array(bytes)),Array.from(fs.readFileSync(path.join(downloadDir,visibleStep))));
+        const visibleInfo=await py("_visible_info","import Part\n_visible_shape=Part.read('/tmp/visible.step')\n_visible_info={'solids':len(_visible_shape.Solids),'volume':_visible_shape.Volume}");
+        assert.equal(visibleInfo.solids,2); near(visibleInfo.volume,48000);
+        pass('STEP selection and visibility scopes preserve the intended exact solids');
         // An older recovery copy may be the only copy a user has. Retain it,
         // never reopen it automatically, and let the user explicitly retrieve it.
         const savedBytes=fs.readFileSync(saved);
         await page.evaluate(async bytes=>{
           const vfs=window.fcInstance.FS, dir='/home/web_user/.fcweb-autosave';
           vfs.mkdirTree(dir); vfs.writeFile(dir+'/Legacy.FCStd',new Uint8Array(bytes));
+          vfs.mkdirTree('/home/web_user/_up/assembly');
+          vfs.writeFile('/home/web_user/_up/assembly/Nested.FCStd',new Uint8Array(bytes));
           await new Promise((resolve,reject)=>vfs.syncfs(false,e=>e?reject(e):resolve()));
         },Array.from(savedBytes));
+        assert.deepEqual(await page.evaluate(()=>window.__fcPyErrors||[]),[],'no rejected operations before reload');
         const allowReload=dialog=>dialog.accept();
         page.on('dialog',allowReload);
         await page.reload({waitUntil:'domcontentloaded'});
@@ -479,18 +512,23 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.equal(await py("not hasattr(App,'_fcweb_saver')"),true);
         await click('CAD_Button_legacy_files');
         await page.waitForSelector('#cad-legacy-files p button');
-        await page.click('#cad-legacy-files p button');
+        const legacyRow='#cad-legacy-files [data-legacy-path="/home/web_user/.fcweb-autosave/Legacy.FCStd"]';
+        const nestedRow='#cad-legacy-files [data-legacy-path="/home/web_user/_up/assembly/Nested.FCStd"]';
+        assert.ok(await page.$(nestedRow),'previously opened nested files must remain retrievable');
+        await page.click(legacyRow+' button');
         const legacyPath=path.join(downloadDir,'Legacy.FCStd');
         for (let i=0;i<300 && !fs.existsSync(legacyPath);i++) await sleep(100);
         assert.deepEqual(fs.readFileSync(legacyPath),savedBytes,'legacy recovery copy downloads unchanged');
         assert.equal(await page.evaluate(()=>window.fcInstance.FS.analyzePath('/home/web_user/.fcweb-autosave/Legacy.FCStd').exists),true);
         page.once('dialog',dialog=>dialog.dismiss());
-        await page.click('#cad-legacy-files p button:nth-child(2)');
+        await page.click(legacyRow+' button:nth-child(2)');
         assert.equal(await page.evaluate(()=>window.fcInstance.FS.analyzePath('/home/web_user/.fcweb-autosave/Legacy.FCStd').exists),true,'cancel must preserve old data');
         page.once('dialog',dialog=>dialog.accept());
-        await page.click('#cad-legacy-files p button:nth-child(2)');
-        await page.waitForFunction(()=>!window.fcInstance.FS.analyzePath('/home/web_user/.fcweb-autosave/Legacy.FCStd').exists);
-        pass('old browser recovery stays closed, downloads intact, and deletes only after confirmation');
+        await page.click(legacyRow+' button:nth-child(2)');
+        await page.waitForFunction(selector=>!document.querySelector(selector),{},legacyRow);
+        assert.equal(await page.evaluate(()=>window.fcInstance.FS.analyzePath('/home/web_user/.fcweb-autosave/Legacy.FCStd').exists),false);
+        assert.equal(await page.evaluate(()=>window.fcInstance.FS.analyzePath('/home/web_user/_up/assembly/Nested.FCStd').exists),true,'deleting one file must preserve other old files');
+        pass('old browser recovery stays closed, nested files remain accessible, and deletion requires confirmation');
       }
       assert.deepEqual(fundraisingRequests,[],'no fundraising requests');
       const bridgeErrors=await page.evaluate(()=>window.__fcPyErrors||[]);

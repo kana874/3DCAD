@@ -525,8 +525,18 @@ class Workspace(QtCore.QObject):
         # retrieval, but are never opened or deleted automatically.
         try:
             import os
-            old = '/home/web_user/.fcweb-autosave'
-            if any(name.lower().endswith('.fcstd') for name in os.listdir(old)):
+            extensions = ('.fcstd', '.step', '.stp', '.iges', '.igs', '.brep', '.brp',
+                          '.stl', '.obj', '.ply', '.3mf', '.ifc', '.dxf')
+            roots = ('/home/web_user/.fcweb-autosave', '/home/web_user/_up', '/home/web_user/_dl')
+            found = any(name.lower().endswith(extensions) for name in os.listdir('/home/web_user'))
+            for old in roots:
+                if found:
+                    break
+                for _, _, files in os.walk(old):
+                    if any(name.lower().endswith(extensions) for name in files):
+                        found = True
+                        break
+            if found:
                 self.button('以前のブラウザ保存データを取り出す',
                             lambda: self.request_file_operation('recover'), 'legacy_files')
         except OSError:

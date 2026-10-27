@@ -74,28 +74,43 @@
     notice.append(link); document.body.append(notice);
   }
   function showLegacyFiles() {
-    const fs=window.fcInstance.FS, dir='/home/web_user/.fcweb-autosave';
+    const fs=window.fcInstance.FS;
     const prior=document.getElementById('cad-legacy-files'); if (prior) prior.remove();
     const panel=document.createElement('div'); panel.id='cad-legacy-files';
     panel.style.cssText='position:fixed;z-index:2147483000;left:50%;top:12%;transform:translateX(-50%);background:#fff;color:#222;padding:20px;border:1px solid #888;border-radius:8px;box-shadow:0 4px 24px #0006;max-height:70vh;overflow:auto;font:15px sans-serif';
     const title=document.createElement('p'); title.textContent='以前のブラウザ保存データ'; panel.appendChild(title);
-    let names=[]; try { names=fs.readdir(dir).filter(name=>name.toLowerCase().endsWith('.fcstd')); } catch (_) {}
-    if (!names.length) { const text=document.createElement('p'); text.textContent='データはありません。'; panel.appendChild(text); }
-    for (const name of names) {
+    const files=[], extensions=/\.(fcstd|step|stp|iges|igs|brep|brp|stl|obj|ply|3mf|ifc|dxf)$/i;
+    function scan(dir, label, recurse) {
+      let entries=[]; try { entries=fs.readdir(dir); } catch (_) { return; }
+      for (const name of entries) {
+        if (name==='.' || name==='..') continue;
+        const path=dir+'/'+name; let stat;
+        try { stat=fs.lstat(path); } catch (_) { continue; }
+        if (recurse && fs.isDir(stat.mode)) scan(path,label+'/'+name,true);
+        else if (fs.isFile(stat.mode) && extensions.test(name)) files.push({name,path,label:label+'/'+name});
+      }
+    }
+    scan('/home/web_user/.fcweb-autosave','以前の自動保存',true);
+    scan('/home/web_user/_up','以前開いたファイル',true);
+    scan('/home/web_user/_dl','以前の保存ファイル',true);
+    scan('/home/web_user','以前のホーム',false);
+    if (!files.length) { const text=document.createElement('p'); text.textContent='データはありません。'; panel.appendChild(text); }
+    for (const entry of files) {
       const row=document.createElement('p');
-      const download=document.createElement('button'); download.textContent=name+' を保存';
+      row.dataset.legacyPath=entry.path;
+      const download=document.createElement('button'); download.textContent=entry.label+' を保存';
       download.onclick=() => {
         try {
-          const url=URL.createObjectURL(new Blob([fs.readFile(dir+'/'+name)],{type:'application/octet-stream'}));
-          const link=document.createElement('a'); link.href=url; link.download=name; document.body.appendChild(link); link.click(); link.remove();
+          const url=URL.createObjectURL(new Blob([fs.readFile(entry.path)],{type:'application/octet-stream'}));
+          const link=document.createElement('a'); link.href=url; link.download=entry.name; document.body.appendChild(link); link.click(); link.remove();
           setTimeout(() => URL.revokeObjectURL(url),60000);
         } catch (error) { window.fcwebNotify?.('データを取り出せませんでした: '+error.message,'error'); }
       };
       const remove=document.createElement('button'); remove.textContent='削除'; remove.style.marginLeft='8px';
       remove.onclick=() => {
-        if (!window.confirm(name+' をブラウザから削除しますか？')) return;
+        if (!window.confirm(entry.label+' をブラウザから削除しますか？')) return;
         try {
-          fs.unlink(dir+'/'+name);
+          fs.unlink(entry.path);
           fs.syncfs(false,error=>{
             if (error) window.fcwebNotify?.('削除結果を保存できませんでした: '+error,'error');
             else { row.remove(); window.fcwebNotify?.('ブラウザから削除しました。','info'); }
