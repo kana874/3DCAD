@@ -65,7 +65,8 @@ fs.mkdirSync(output, {recursive: true});
       console.log('OCCT_PROBE', name, JSON.stringify(result));
       return result;
     }
-    const setup=await probe('setup', "_d=App.newDocument('TrimProbe'); _o=_d.addObject('Part::Box','Box'); _o.Length=4; _o.Width=6; _o.Height=10; _d.recompute(); _before=(_o.Shape.Volume,len(_d.Objects),_d.UndoCount)");
+    await probe('version', "raise RuntimeError(str(Part.OCC_VERSION))");
+    const setup=await probe('setup', "_occt_doc=App.newDocument('TrimProbe'); _occt_obj=_occt_doc.addObject('Part::Box','Box'); _occt_obj.Length=4; _occt_obj.Width=6; _occt_obj.Height=10; _occt_doc.recompute(); _occt_before=(_occt_obj.Shape.Volume,len(_occt_doc.Objects),_occt_doc.UndoCount)");
     assert.equal(setup.out,'OK'); assert.deepEqual(setup.errors,[]);
     const normal=await probe('valid', "_e=Part.ArcOfParabola(Part.Parabola(),0.0,1.0)");
     assert.equal(normal.out,'OK'); assert.deepEqual(normal.errors,[]);
@@ -73,7 +74,7 @@ fs.mkdirSync(output, {recursive: true});
     assert.match(invalid.out||'',/Geom_TrimmedCurve::U1 == U2/); assert.deepEqual(invalid.errors,[]);
     const infinity=await probe('inf', "_e=Part.ArcOfParabola(Part.Parabola(),float('inf'),1.0)");
     assert.match(infinity.out||'',/Geom_TrimmedCurve::U1 == U2/); assert.deepEqual(infinity.errors,[]);
-    const after=await probe('state', "assert (_o.Shape.Volume,len(_d.Objects),_d.UndoCount)==_before; assert _o.Shape.isValid()");
+    const after=await probe('state', "assert (_occt_obj.Shape.Volume,len(_occt_doc.Objects),_occt_doc.UndoCount)==_occt_before; assert _occt_obj.Shape.isValid()");
     assert.equal(after.out,'OK'); assert.deepEqual(after.errors,[]);
     console.log('OCCT_GUARD_VALIDATED');
   } finally {
