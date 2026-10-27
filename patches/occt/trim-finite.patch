@@ -1,15 +1,7 @@
 --- a/src/Geom/Geom_TrimmedCurve.cxx
 +++ b/src/Geom/Geom_TrimmedCurve.cxx
-@@
- #include <Geom_TrimmedCurve.hxx>
+@@ -24,0 +25 @@
 +#include <cmath>
-@@
- void Geom_TrimmedCurve::SetTrim (const Standard_Real U1,
-                                  const Standard_Real U2,
-                                  const Standard_Boolean Sense,
-                                  const Standard_Boolean theAdjustPeriodic)
- {
-+   // Equivalent to the WASM guard: route nonfinite bounds through the
-+   // existing equal-bound error path instead of recursively reversing.
-+   if (!std::isfinite(U1) || !std::isfinite(U2))
-+     throw Standard_ConstructionError("Geom_TrimmedCurve::U1 == U2");
+@@ -116 +117 @@
+-   if (U1 == U2)
++   if (!std::isfinite(U1) || !std::isfinite(U2) || U1 == U2)

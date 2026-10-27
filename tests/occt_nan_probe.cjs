@@ -74,6 +74,8 @@ fs.mkdirSync(output, {recursive: true});
     assert.match(invalid.out||'',/Geom_TrimmedCurve::U1 == U2/); assert.deepEqual(invalid.errors,[]);
     const infinity=await probe('inf', "_e=Part.ArcOfParabola(Part.Parabola(),float('inf'),1.0)");
     assert.match(infinity.out||'',/Geom_TrimmedCurve::U1 == U2/); assert.deepEqual(infinity.errors,[]);
+    const rollback=await probe('transaction', "with __import__('cad_core').transaction(_occt_doc, 'Invalid curve'): _occt_obj.Length=9; Part.ArcOfParabola(Part.Parabola(),float('nan'),1.0)");
+    assert.match(rollback.out||'',/Geom_TrimmedCurve::U1 == U2/); assert.deepEqual(rollback.errors,[]);
     const after=await probe('state', "assert (_occt_obj.Shape.Volume,len(_occt_doc.Objects),_occt_doc.UndoCount)==_occt_before; assert _occt_obj.Shape.isValid()");
     assert.equal(after.out,'OK'); assert.deepEqual(after.errors,[]);
     console.log('OCCT_GUARD_VALIDATED');
