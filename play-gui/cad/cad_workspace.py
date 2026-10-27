@@ -120,6 +120,7 @@ class Workspace(QtCore.QObject):
         self.build_history()
         self.build_view_menu()
         self.build_command_menus()
+        self.apply_mode_tab()
         from cad_catalog import CommandCatalog
         self.catalog = CommandCatalog(self)
         self.observer = Observer(self)
@@ -276,6 +277,7 @@ class Workspace(QtCore.QObject):
         bar.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
         bar.setStyleSheet('QToolBar {background:palette(window);color:palette(window-text);spacing:5px;padding:6px;} QToolButton {padding:7px;color:palette(button-text);} QToolButton:disabled {color:palette(mid);}')
         self.main.addToolBar(QtCore.Qt.TopToolBarArea, bar)
+        self.mode_widgets = {'solid': [], 'sketch': []}
         groups = [
             [('new', '新規', None), ('open', '開く', None), ('save', '保存', None), ('export', '書出し', None)],
             [('sketch', 'スケッチを作成', None), ('finish', 'スケッチ終了', None)],
@@ -284,11 +286,21 @@ class Workspace(QtCore.QObject):
             [('extrude', '押し出し E', 'E'), ('fillet', 'フィレット F', 'F'), ('chamfer', '面取り', None)],
             [('search', '検索 S', 'S'), ('grid', '原点・グリッド', None), ('fit', '全体表示', None)]
         ]
-        for group in groups:
-            if bar.actions():
-                bar.addSeparator()
+        for index, group in enumerate(groups):
+            if index == 1:
+                self.mode_tabs = QtWidgets.QTabBar(bar)
+                self.mode_tabs.setObjectName('CAD_ModeTabs')
+                self.mode_tabs.addTab('ソリッド')
+                self.mode_tabs.addTab('スケッチ')
+                self.mode_tabs.setCurrentIndex(0)
+                bar.addWidget(self.mode_tabs)
             for name, title, key in group:
-                bar.addAction(self.action(name, title, key))
+                action = self.action(name, title, key)
+                bar.addAction(action)
+                if name in ('sketch', 'extrude', 'fillet', 'chamfer'):
+                    self.mode_widgets['solid'].append(bar.widgetForAction(action))
+                elif name in ('finish', 'line', 'rectangle', 'circle', 'dimension', 'trim', 'construction'):
+                    self.mode_widgets['sketch'].append(bar.widgetForAction(action))
         # Keep normal Save available on the main button; its small menu offers
         # an explicit new destination without adding another wide toolbar item.
         save_button = bar.widgetForAction(self.actions['save'])
@@ -298,6 +310,14 @@ class Workspace(QtCore.QObject):
         save_button.setPopupMode(QtWidgets.QToolButton.MenuButtonPopup)
         self.action('cancel', 'キャンセル', 'Esc')
         self.bar = bar
+        self.mode_tabs.currentChanged.connect(self.apply_mode_tab)
+
+    def apply_mode_tab(self, *_):
+        mode = 'sketch' if self.mode_tabs.currentIndex() == 1 else 'solid'
+        for group, widgets in self.mode_widgets.items():
+            for widget in widgets:
+                if widget:
+                    widget.setVisible(group == mode)
 
     def build_command_menus(self):
         from cad_commands import SKETCH_TOOLS
@@ -310,12 +330,14 @@ class Workspace(QtCore.QObject):
                 self.native_actions[name] = (command, sketch_only)
                 self.action(name, title)
             menu.addAction(self.actions[name])
-        def add_menu(title, menu):
+        def add_menu(title, menu, mode=None):
             button = QtWidgets.QToolButton(self.bar)
             button.setText(title)
             button.setMenu(menu)
             button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
             self.bar.addWidget(button)
+            if mode:
+                self.mode_widgets[mode].append(button)
         sketch = QtWidgets.QMenu('作図', self.bar)
         for title, commands in SKETCH_TOOLS:
             submenu = sketch.addMenu(title)
@@ -326,7 +348,7 @@ class Workspace(QtCore.QObject):
         sketch.addAction(self.action('circle_two_points', '2点円（直径の両端を座標指定）'))
         sketch.addAction(self.action('sketch_settings', 'スケッチ表示・スナップ設定'))
         sketch.addAction(self.action('rectangle_center_exact', '中心・幅・高さを数値指定'))
-        add_menu('作図', sketch)
+        add_menu('作図', sketch, 'sketch')
         for title, prefix in [('修正・拘束', 'Sketcher_'), ('ソリッド', 'PartDesign_'), ('形状・検査', 'Part_')]:
             menu = QtWidgets.QMenu(title, self.bar)
             for command in sorted(available):
@@ -338,7 +360,7 @@ class Workspace(QtCore.QObject):
                 except Exception:
                     label = command
                 adapter(menu, label, command, prefix == 'Sketcher_')
-            add_menu(title, menu)
+            add_menu(title, menu, 'sketch' if prefix == 'Sketcher_' else 'solid')
 
     def measure_panel(self):
         self.clear_panel('測定')
@@ -1198,6 +1220,14 @@ class Workspace(QtCore.QObject):
             if self.plane_picker and (not Gui.activeDocument() or self.plane_picker.view != Gui.activeDocument().activeView()):
                 self.close_plane_picker()
                 self.current_command = None
+            # Native selection is delivered after the mouse event. Defer the
+            # transition to this timer rather than mutating the scene from a
+            # Coin selection callback while it is traversing that scene.
+            if self.plane_picker and self.current_command == 'plane_select':
+                face = self.face_selection()
+                if face:
+                    self.safe(partial(self.start_sketch, face=face))
+                    return
             editing_native = bool(Gui.activeDocument() and Gui.activeDocument().getInEdit())
             task_buttons = self.native_task_widget and any(box.isVisible() for box in self.native_task_widget.findChildren(QtWidgets.QDialogButtonBox))
             if self.native_task_active and not self.native_task_pending and not Gui.Control.activeDialog() and not editing_native and not task_buttons:
@@ -1209,6 +1239,10 @@ class Workspace(QtCore.QObject):
                          bool(Gui.activeDocument() and Gui.activeDocument().getInEdit()),
                          bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph')))
             if signature != self.signature:
+                previous_edit = self.signature[1] if self.signature else None
+                current_edit = edit.Name if edit else None
+                if bool(current_edit) != bool(previous_edit):
+                    self.mode_tabs.setCurrentIndex(1 if current_edit else 0)
                 self.signature = signature
                 self.dirty = True
                 if Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'setNavigationType'):

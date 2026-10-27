@@ -126,6 +126,13 @@ fs.mkdirSync(output, {recursive: true});
       pass('empty document references are visible, model stays empty, toolbar follows dark/light palette');
       await click('CAD_Button_create_sketch');
       await click('CAD_Button_start_sketch');
+      assert.equal(await py('cad_workspace.WORKSPACE.mode_tabs.currentIndex()'),1,'entering sketch edit selects the sketch tab');
+      const tabs=await py("[(lambda p:[p.x(),p.y()])(cad_workspace.WORKSPACE.mode_tabs.mapToGlobal(cad_workspace.WORKSPACE.mode_tabs.tabRect(i).center())) for i in (0,1)]");
+      await page.mouse.click(...tabs[0]); await sleep(350);
+      assert.equal(await py('cad_workspace.WORKSPACE.mode_tabs.currentIndex()'),0);
+      assert.ok(await py('bool(cad_workspace.sketch_in_edit(Gui))'),'switching tabs must not finish the sketch');
+      await page.mouse.click(...tabs[1]); await sleep(350);
+      assert.equal(await py('cad_workspace.WORKSPACE.mode_tabs.currentIndex()'),1);
       assert.equal(await py('cad_workspace.WORKSPACE.reference_root.whichChild.getValue()'), -1, 'Sketcher owns the edit grid');
       await click('CAD_Button_rectangle_exact');
       await fill('width', '50 mm'); await fill('height', '30 mm');
@@ -133,12 +140,23 @@ fs.mkdirSync(output, {recursive: true});
       await press('e'); await sleep(800);
       assert.equal((await state()).session, 'extrude', 'E must route to the dedicated command');
       await click('CAD_Button_accept');
+      assert.equal(await py('cad_workspace.WORKSPACE.mode_tabs.currentIndex()'),0,'finishing the sketch returns to the solid tab');
       model = await state();
       near(model.features.find(o => o.type === 'PartDesign::Pad').volume, 15000);
       pass('numeric sketch -> E -> Pad: 15000 mm3');
       await sleep(900);
 
-      // Pick a real rendered face, not a programmatic selection.
+      // Start the command first, then pick a real rendered body face. The
+      // selected face should immediately become the sketch support.
+      await click('CAD_Action_sketch');
+      const facePoint = await py("_points[:1]", "from PySide6 import QtCore, QtWidgets\n_w=cad_workspace.WORKSPACE\n_mdi=_w.main.findChild(QtWidgets.QMdiArea)\n_viewer=next(w for w in _mdi.activeSubWindow().findChildren(QtWidgets.QWidget) if w.metaObject().className()=='Gui::View3DInventorViewer')\n_view=Gui.activeDocument().activeView()\n_points=[]\nfor _y in range(30,_viewer.height()-30,12):\n for _x in range(30,_viewer.width()-30,12):\n  _info=_view.getObjectInfo((_x,_viewer.height()-1-_y))\n  if _info and str(_info.get('Component','')).startswith('Face') and _w.plane_picker.pick_at(_x,_y) is None:\n   _p=_viewer.mapToGlobal(QtCore.QPoint(_x,_y)); _points.append([_p.x(),_p.y(),_info.get('Component')]); break\n if _points: break");
+      assert.ok(facePoint.length, 'a visible body face outside the reference planes must be clickable');
+      await page.mouse.click(facePoint[0][0], facePoint[0][1]); await sleep(700);
+      assert.ok(await py("bool(cad_workspace.sketch_in_edit(Gui))"), 'face selection should start sketch editing');
+      assert.ok(await py("bool(cad_workspace.sketch_in_edit(Gui).AttachmentSupport)"), 'the sketch must be attached to the selected face');
+      await click('CAD_Button_finish');
+      await py('True', "App.ActiveDocument.removeObject('Sketch001')\nApp.ActiveDocument.recompute()\nGui.Selection.clearSelection()\nGui.activeDocument().activeView().viewAxonometric()\nGui.activeDocument().activeView().fitAll()");
+      await sleep(700);
       await page.mouse.click(810, 420); await sleep(400);
       const picked = await py('[(s.Object.Name,list(s.SubElementNames)) for s in Gui.Selection.getSelectionEx()]');
       assert.ok(picked.some(item => item[1].some(name => name.startsWith('Face'))), JSON.stringify(picked));
