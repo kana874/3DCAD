@@ -356,10 +356,21 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       const methods = await py("[(b.objectName(),[b.itemText(i) for i in range(b.count())]) for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QComboBox) if b.isVisible()]",'from PySide6 import QtWidgets');
       const rectangleMethod = await py("(lambda b:[b.mapToGlobal(b.rect().center()).x(),b.mapToGlobal(b.rect().center()).y()])(next(b for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QComboBox) if b.isVisible() and b.count()==4 and any('3' in b.itemText(i) for i in range(b.count()))))",'from PySide6 import QtWidgets');
       assert.ok(methods.length,'native construction methods must be exposed');
-      await page.mouse.click(...rectangleMethod); await press('Home'); await press('ArrowDown'); await press('ArrowDown'); await press('Enter');
+      await page.mouse.click(...rectangleMethod);
+      const methodRow = await py("(lambda b,i:[b.view().viewport().mapToGlobal(b.view().visualRect(i).center()).x(),b.view().viewport().mapToGlobal(b.view().visualRect(i).center()).y()])(next(b for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QComboBox) if b.isVisible() and b.count()==4 and any('3' in b.itemText(i) for i in range(b.count()))),next(b for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QComboBox) if b.isVisible() and b.count()==4 and any('3' in b.itemText(i) for i in range(b.count()))).model().index(2,0))",'from PySide6 import QtWidgets');
+      await page.mouse.click(...methodRow);
+      let methodState;
+      for (let attempt=0;attempt<20;attempt++) {
+        methodState = await py("(lambda b:[b.currentIndex(),QtWidgets.QApplication.activePopupWidget() is None])(next(b for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QComboBox) if b.isVisible() and b.count()==4 and any('3' in b.itemText(i) for i in range(b.count()))))",'from PySide6 import QtWidgets');
+        if (methodState[0]===2 && methodState[1]) break;
+        await sleep(100);
+      }
+      assert.deepEqual(methodState,[2,true],'construction mode must be selected before drawing');
       async function sketchPoint(p, clickPoint=true) {
         const xy = await py("(lambda w,p:[w.mapToGlobal(QtCore.QPoint(0,0)).x()+p[0],w.mapToGlobal(QtCore.QPoint(0,0)).y()+w.height()-1-p[1]])(next(w for w in Gui.getMainWindow().findChild(QtWidgets.QMdiArea).activeSubWindow().findChildren(QtWidgets.QWidget) if w.metaObject().className()=='Gui::View3DInventorViewer'),Gui.activeDocument().activeView().getPointOnScreen(App.Vector("+p.join(',')+")))",'from PySide6 import QtCore,QtWidgets');
-        if (clickPoint) await page.mouse.click(...xy); else await page.mouse.move(...xy);
+        await page.mouse.move(...xy);
+        await sleep(120); // Let Qt process motion before the separate button events.
+        if (clickPoint) { await page.mouse.down(); await sleep(40); await page.mouse.up(); }
         await sleep(250);
         return xy;
       }
