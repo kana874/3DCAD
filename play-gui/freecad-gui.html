@@ -7190,7 +7190,7 @@ window.fcRunPy = fcRunPy;
   // Ctrl+S / Ctrl+O convenience -> same bridge (capture phase so a stray native dialog never runs)
   window.addEventListener('keydown',function(e){
     var k=(e.key||'').toLowerCase();
-    if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); (window.__cadSaveRequest||download)(); }
+    if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); (window.__cadSaveRequest||download)(e.shiftKey); }
     else if((e.metaKey||e.ctrlKey)&&k==='o'){ e.preventDefault(); e.stopImmediatePropagation(); openFile(); }
     else if(k==='escape'){ closeActivePopup(); }
   },true);

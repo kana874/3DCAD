@@ -93,7 +93,8 @@ def localize(page: str) -> str:
     page = page.replace('        try { py(AUTOSAVE_FORCE); } catch (e) {}\n', '')
     page = page.replace("+ 'been saved. Save a copy with File", "+ 'not been saved automatically. Save a copy with File")
     page = page.replace("'has. Your work has been saved. Consider simplifying it or closing documents you '", "'has. Save a local copy and consider simplifying it or closing documents you '")
-    page = page.replace("if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); download(); }", "if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); (window.__cadSaveRequest||download)(); }")
+    page = page.replace("if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); download(); }", "if((e.metaKey||e.ctrlKey)&&k==='s'){ e.preventDefault(); e.stopImmediatePropagation(); (window.__cadSaveRequest||download)(e.shiftKey); }")
+    page = page.replace("(window.__cadSaveRequest||download)();", "(window.__cadSaveRequest||download)(e.shiftKey);")
     # A rejected JSPI call is not proof that FreeCAD rolled back every mutation.
     page = page.replace('). Your document is unchanged — please report this.',
                         '). The document may have changed. Check the model before continuing; save a copy and report this error.')

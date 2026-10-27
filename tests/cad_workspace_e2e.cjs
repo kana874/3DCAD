@@ -448,6 +448,19 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         await click('CAD_Action_save');
         const saved=await waitDownload('.fcstd');
         assert.ok(fs.statSync(saved).size>500,'FCStd was downloaded to disk');
+        const oldCopies=new Map(fs.readdirSync(downloadDir).filter(n=>n.toLowerCase().endsWith('.fcstd')).map(n=>[n,fs.statSync(path.join(downloadDir,n)).mtimeMs]));
+        const saveArrow=await py("(lambda b:[b.mapToGlobal(QtCore.QPoint(b.width()-5,b.height()//2)).x(),b.mapToGlobal(QtCore.QPoint(b.width()-5,b.height()//2)).y()])(cad_workspace.WORKSPACE.bar.widgetForAction(cad_workspace.WORKSPACE.actions['save']))",'from PySide6 import QtCore');
+        await page.mouse.click(...saveArrow); await sleep(300);
+        const saveAsPoint=await py("(lambda m,a:[m.mapToGlobal(m.actionGeometry(a).center()).x(),m.mapToGlobal(m.actionGeometry(a).center()).y()])(QtWidgets.QApplication.activePopupWidget(),cad_workspace.WORKSPACE.actions['save_as'])",'from PySide6 import QtWidgets');
+        await page.mouse.click(...saveAsPoint);
+        let savedAgain=false;
+        for (let i=0;i<600;i++) {
+          const names=fs.readdirSync(downloadDir).filter(n=>n.toLowerCase().endsWith('.fcstd'));
+          savedAgain=names.some(n=>!oldCopies.has(n)||fs.statSync(path.join(downloadDir,n)).mtimeMs>oldCopies.get(n));
+          if(savedAgain&&!fs.readdirSync(downloadDir).some(n=>n.endsWith('.crdownload'))) break;
+          await sleep(100);
+        }
+        assert.equal(savedAgain,true,'Save As menu must create another local copy');
         const chooserPromise=page.waitForFileChooser({timeout:30000});
         await click('CAD_Action_open');
         const chooser=await chooserPromise;
@@ -516,6 +529,7 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
           Object.defineProperty(document,'hidden',{value:true,configurable:true});
           document.dispatchEvent(new Event('visibilitychange'));
           delete document.hidden;
+          document.dispatchEvent(new Event('visibilitychange'));
         });
         await page.waitForFunction(()=>!window.__fcPyBusy && !window.__cadPrefsPending);
         await page.evaluate(async bytes=>{
@@ -536,6 +550,15 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.equal(await py("not hasattr(App,'_fcweb_saver')"),true);
         assert.equal(await py("App.ParamGet('User parameter:BaseApp/Preferences/CADFileTest').GetString('PersistProbe','')"),'kept','application preferences must persist across reload');
         await click('CAD_Button_legacy_files');
+        await sleep(1000);
+        console.log('LEGACY_DIAG', JSON.stringify(await page.evaluate(() => {
+          const f=window.fcInstance.FS;
+          return {panel:document.querySelector('#cad-legacy-files')?.outerHTML,
+            marker:f.analyzePath('/tmp/cad-file-request.json').exists,
+            methods:['lstat','isDir','isFile'].map(k=>[k,typeof f[k]]),
+            files:f.readdir('/home/web_user/.fcweb-autosave'),
+            status:document.body.innerText.slice(-1200),busy:window.__fcPyBusy};
+        })));
         await page.waitForSelector('#cad-legacy-files p button');
         const legacyRow='#cad-legacy-files [data-legacy-path="/home/web_user/.fcweb-autosave/Legacy.FCStd"]';
         const nestedRow='#cad-legacy-files [data-legacy-path="/home/web_user/_up/assembly/Nested.FCStd"]';
@@ -554,6 +577,10 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.equal(await page.evaluate(()=>window.fcInstance.FS.analyzePath('/home/web_user/.fcweb-autosave/Legacy.FCStd').exists),false);
         assert.equal(await page.evaluate(()=>window.fcInstance.FS.analyzePath('/home/web_user/_up/assembly/Nested.FCStd').exists),true,'deleting one file must preserve other old files');
         pass('old browser recovery stays closed, nested files remain accessible, and deletion requires confirmation');
+        const tokenTest=await py("_token_test","_d1=App.newDocument('TokenReuse')\n_n1=_d1.Name\n_t1=cad_workspace.WORKSPACE.file_token(_d1)\nApp.closeDocument(_n1)\n_d2=App.newDocument('TokenReuse')\n_n2=_d2.Name\n_t2=cad_workspace.WORKSPACE.file_token(_d2)\n_token_test=[_n1,_n2,_t1,_t2]\nApp.closeDocument(_n2)");
+        assert.equal(tokenTest[0],tokenTest[1]);
+        assert.notEqual(tokenTest[2],tokenTest[3],'a new document with the same name must never reuse the previous save destination');
+        pass('Save As control and document identity prevent unintended reuse of old save destinations');
       }
       assert.deepEqual(fundraisingRequests,[],'no fundraising requests');
       const bridgeErrors=await page.evaluate(()=>window.__fcPyErrors||[]);

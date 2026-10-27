@@ -6,6 +6,7 @@ const source=fs.readFileSync('play-gui/cad/workspace.js','utf8');
 const encoder=new TextEncoder();
 async function exercise(mode) {
   const timers=[], files=new Map(), writes=[], downloads=[], notices=[], calls=[];
+  let pickers=0;
   const vfs={readFile(p){if(!files.has(p))throw new Error('missing');return files.get(p);},unlink(p){files.delete(p);}};
   class TestURL extends URL { static createObjectURL(){return 'blob:test';} static revokeObjectURL(){} }
   const document={currentScript:{src:'https://example.test/cad/workspace.js'},
@@ -25,19 +26,29 @@ async function exercise(mode) {
     if(mode!=='error')files.set(payload.out,new Uint8Array([1,2,3]));
   };
   if(mode!=='fallback') scope.showSaveFilePicker=async ()=>{
+    pickers++;
     if(mode==='cancel') {const e=new Error('cancel');e.name='AbortError';throw e;}
     return {createWritable:async()=>({write:async b=>writes.push(Array.from(b)),close:async()=>{}})};
   };
   vm.runInNewContext(source,scope);
-  files.set('/tmp/cad-file-request.json',encoder.encode(JSON.stringify({operation:'save',document:'D',label:'Sample',scope:'visible',selected:[]})));
+  files.set('/tmp/cad-file-request.json',encoder.encode(JSON.stringify({operation:'save',document:'D',token:'doc-1',label:'Sample',scope:'visible',selected:[]})));
   timers.at(-1)();
   await new Promise(resolve=>setTimeout(resolve,30));
-  return {writes,downloads,notices,calls,files};
+  if(mode==='repeat') {
+    for (const [operation,token] of [['save','doc-1'],['save_as','doc-1'],['save','doc-2']]) {
+      files.set('/tmp/cad-file-request.json',encoder.encode(JSON.stringify({operation,document:'D',token,label:'Sample',scope:'visible',selected:[]})));
+      timers.at(-1)(); await new Promise(resolve=>setTimeout(resolve,30));
+    }
+  }
+  return {writes,downloads,notices,calls,files,pickers};
 }
 const canceled=await exercise('cancel');
 assert.equal(canceled.calls.length,0); assert.equal(canceled.writes.length,0);
 const saved=await exercise('success');
 assert.equal(saved.calls.length,1); assert.match(saved.calls[0],/saveCopy/); assert.deepEqual(saved.writes,[[1,2,3]]);
+const repeated=await exercise('repeat');
+assert.equal(repeated.pickers,3,'reuse a saved handle, but prompt for Save As and a new document');
+assert.equal(repeated.writes.length,4);
 const failed=await exercise('error');
 assert.equal(failed.writes.length,0); assert.match(failed.notices[0][0],/保存できませんでした/);
 const fallback=await exercise('fallback');

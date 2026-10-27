@@ -31,13 +31,22 @@ class Observer:
     setSelection = changed
     def slotCreatedDocument(self, *args):
         self.changed(*args)
+        try:
+            self.workspace.file_tokens.pop(args[0].Name, None)
+        except Exception:
+            self.workspace.file_tokens.clear()
         # Set immediately: a user can close the page before the next Qt tick.
         try:
             with open('/tmp/cad-open-documents', 'w') as marker:
                 marker.write('1')
         except OSError:
             pass
-    slotDeletedDocument = changed
+    def slotDeletedDocument(self, *args):
+        self.changed(*args)
+        try:
+            self.workspace.file_tokens.pop(args[0].Name, None)
+        except Exception:
+            self.workspace.file_tokens.clear()
     slotActivateDocument = changed
     slotCreatedObject = changed
     slotDeletedObject = changed
@@ -54,6 +63,9 @@ class Workspace(QtCore.QObject):
         self.main = Gui.getMainWindow()
         super().__init__(self.main)
         self.dirty = True
+        self.file_tokens = {}
+        self.file_token_epoch = str(time.time_ns())
+        self.file_token_counter = 0
         self.native_task_pending = False
         self.native_task_widget = None
         self.native_task_dock = None
@@ -175,8 +187,8 @@ class Workspace(QtCore.QObject):
             Gui.runCommand('Std_DlgPreferences')
         elif name == 'search':
             self.search_panel()
-        elif name == 'save':
-            self.request_file_operation('save')
+        elif name in ('save', 'save_as'):
+            self.request_file_operation(name)
         elif name == 'open':
             self.request_file_operation('open')
         elif name == 'export':
@@ -277,6 +289,13 @@ class Workspace(QtCore.QObject):
                 bar.addSeparator()
             for name, title, key in group:
                 bar.addAction(self.action(name, title, key))
+        # Keep normal Save available on the main button; its small menu offers
+        # an explicit new destination without adding another wide toolbar item.
+        save_button = bar.widgetForAction(self.actions['save'])
+        save_menu = QtWidgets.QMenu(save_button)
+        save_menu.addAction(self.action('save_as', '名前を付けて保存'))
+        save_button.setMenu(save_menu)
+        save_button.setPopupMode(QtWidgets.QToolButton.MenuButtonPopup)
         self.action('cancel', 'キャンセル', 'Esc')
         self.bar = bar
 
@@ -503,10 +522,17 @@ class Workspace(QtCore.QObject):
         if operation == 'step' and scope == 'selected' and not selected:
             raise CadError('書き出すボディを選択してください。')
         request = {'operation': operation, 'document': doc.Name if doc else None,
+                   'token': self.file_token(doc) if doc else None,
                    'label': doc.Label if doc else '', 'scope': scope, 'selected': selected}
         with open('/tmp/cad-file-request.json', 'w', encoding='utf-8') as out:
             json.dump(request, out, ensure_ascii=False)
         self.status('ブラウザのファイル操作を続けてください。')
+
+    def file_token(self, doc):
+        if doc.Name not in self.file_tokens:
+            self.file_token_counter += 1
+            self.file_tokens[doc.Name] = self.file_token_epoch + '-' + str(self.file_token_counter)
+        return self.file_tokens[doc.Name]
 
     def export_panel(self):
         self.clear_panel('STEPを書き出し')
@@ -1226,7 +1252,7 @@ class Workspace(QtCore.QObject):
             self.actions[name].setEnabled(not locked and bool(edit if sketch_only else doc))
         for name in ('rectangle_center_exact', 'rectangle_three_points', 'circle_two_points', 'sketch_settings'):
             self.actions[name].setEnabled(bool(edit) and not locked)
-        for name in ('save', 'export'):
+        for name in ('save', 'save_as', 'export'):
             self.actions[name].setEnabled(bool(doc) and not locked)
         for name in ('extrude', 'fillet', 'chamfer', 'fit', 'grid'):
             self.actions[name].setEnabled(is_3d and not locked)
