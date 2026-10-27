@@ -14,7 +14,7 @@ from cad_core import (CadError, ExtrusionSession, add_circle, add_rectangle,
                       body_of, create_sketch, length, selected_sketch,
                       sketch_in_edit, transaction, valid_shape)
 
-VERSION = '0.2.1'
+VERSION = '0.2.2'
 WORKSPACE = None
 
 
@@ -75,6 +75,7 @@ class Workspace(QtCore.QObject):
         self.syncing = False
         self.last_sketch = None
         self.preview_ok = False
+        self.native_task_sketch = False
         self.native_task_active = False
         self.native_widgets = list(self.main.findChildren(QtWidgets.QDockWidget)) + list(self.main.findChildren(QtWidgets.QToolBar))
         self.saved_visibility = [(w, w.isVisible()) for w in self.native_widgets]
@@ -135,7 +136,7 @@ class Workspace(QtCore.QObject):
             self.dirty = True
 
     def route(self, name, *_):
-        if self.native_task_active and name not in ('cancel', 'layout_reset', 'show_browser', 'show_design', 'show_history'):
+        if self.native_task_active and not self.native_task_sketch and name not in ('cancel', 'layout_reset', 'show_browser', 'show_design', 'show_history'):
             self.status('現在の操作を確定またはキャンセルしてください。', True)
             return
         if self.session and name not in ('cancel',):
@@ -186,8 +187,7 @@ class Workspace(QtCore.QObject):
             command, sketch_only = self.native_actions[name]
             if sketch_only and not sketch_in_edit(Gui):
                 raise CadError('スケッチを作成・編集してから実行してください。')
-            if not sketch_only:
-                self.show_native_tasks()
+            self.show_native_tasks(sketch=sketch_only)
             Gui.runCommand(command)
         elif name == 'cancel':
             self.cancel()
@@ -215,6 +215,8 @@ class Workspace(QtCore.QObject):
                 raise CadError('スケッチを作成・編集してから実行してください。')
             if name in ('fillet', 'chamfer', 'measure'):
                 self.show_native_tasks()
+            elif name in ('line', 'rectangle', 'circle', 'dimension', 'trim', 'construction'):
+                self.show_native_tasks(sketch=True)
             Gui.runCommand(commands[name])
 
     def action(self, name, title, key=None):
@@ -321,6 +323,11 @@ class Workspace(QtCore.QObject):
         if not sketch:
             raise CadError('スケッチ編集中に設定してください。')
         self.clear_panel('スケッチ設定')
+        params = App.ParamGet('User parameter:BaseApp/Preferences/Mod/Sketcher/Tools')
+        ovp = self.combo('on_view_parameters', 'カーソル付近の数値入力', [('非表示', 0), ('寸法', 1), ('位置と寸法', 2)])
+        ovp.setCurrentIndex(max(0, min(2, params.GetInt('OnViewParameterVisibility', 1))))
+        ovp.currentIndexChanged.connect(lambda index: params.SetInt('OnViewParameterVisibility', index))
+        self.form.addRow(QtWidgets.QLabel('次に開始する作図ツールから反映されます。Tabで入力項目を切り替えます。'))
         titles = {'ShowGrid': 'グリッド表示', 'GridSnap': 'グリッドにスナップ', 'GridAuto': 'グリッド間隔を自動調整', 'ShowConstraints': '拘束を表示', 'ShowAxes': '軸を表示', 'ShowPoints': '点を表示'}
         for name in sketch.ViewObject.PropertiesList:
             if (name.startswith('Show') or name in titles) and isinstance(getattr(sketch.ViewObject, name), bool):
@@ -532,6 +539,7 @@ class Workspace(QtCore.QObject):
         sketch = sketch_in_edit(Gui)
         if not sketch:
             raise CadError('スケッチ編集中ではありません。')
+        self.release_native_tasks()
         Gui.activeDocument().resetEdit()
         sketch.Document.recompute()
         Gui.Selection.clearSelection()
@@ -784,6 +792,7 @@ class Workspace(QtCore.QObject):
             self.edit_region_panel(obj)
         elif obj.TypeId == 'Sketcher::SketchObject':
             if Gui.activeDocument().getInEdit():
+                self.release_native_tasks()
                 Gui.activeDocument().resetEdit()
             Gui.activeDocument().setEdit(obj.Name)
             self.sketch_home(obj)
@@ -951,15 +960,17 @@ class Workspace(QtCore.QObject):
             self.native_task_dock.setWidget(self.native_task_widget)
             self.native_task_widget = self.native_task_dock = None
         self.native_task_active = False
+        self.native_task_sketch = False
         self.native_task_pending = False
         if hasattr(self, 'native_host'):
             self.native_host.hide()
         if hasattr(self, 'body'):
             self.body.show()
 
-    def show_native_tasks(self):
-        self.clear_panel('操作')
-        self.current_command = 'native_task'
+    def show_native_tasks(self, sketch=False):
+        self.clear_panel('作図パラメータ' if sketch else '操作')
+        self.current_command = 'sketch_native' if sketch else 'native_task'
+        self.native_task_sketch = sketch
         self.native_task_active = True
         self.native_task_pending = True
         self.body.hide()
@@ -1122,7 +1133,7 @@ class Workspace(QtCore.QObject):
         self.dirty = False
         doc = App.ActiveDocument
         edit = sketch_in_edit(Gui)
-        locked = self.session is not None or self.native_task_active
+        locked = self.session is not None or (self.native_task_active and not self.native_task_sketch)
         is_3d = bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph'))
         for name, action in self.actions.items():
             action.setEnabled(not locked or name == 'cancel')
@@ -1309,7 +1320,8 @@ class Workspace(QtCore.QObject):
         if event.type() == QtCore.QEvent.ShortcutOverride:
             if event.key() == QtCore.Qt.Key_Escape and self.session:
                 name = 'cancel'
-            if name or text_input and event.key() != QtCore.Qt.Key_Escape:
+            protected_text_key = text_input and not event.modifiers() & blocked_modifiers and event.text().upper() in self.key_actions
+            if name or protected_text_key:
                 event.accept()
                 return True
         if event.type() == QtCore.QEvent.KeyPress and name:

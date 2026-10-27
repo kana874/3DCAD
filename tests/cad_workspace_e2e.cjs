@@ -62,8 +62,8 @@ fs.mkdirSync(output, {recursive: true});
     }
     const state = () => py('cad_workspace.WORKSPACE.diagnostics()');
     async function press(key) {
-      if (key === 'Control+A') {
-        await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control');
+      if (key.startsWith('Control+')) {
+        await page.keyboard.down('Control'); await page.keyboard.press(key.slice(8)); await page.keyboard.up('Control');
       } else { await page.keyboard.press(key); }
     }
     async function click(name) {
@@ -89,7 +89,7 @@ fs.mkdirSync(output, {recursive: true});
     function pass(label) { passed.push(label); console.log('PASS', label); }
     try {
       let model;
-      if (!['workflows','regions','catalog'].includes(process.env.CAD_TEST_PHASE)) {
+      if (!['workflows','regions','catalog','sketchtools'].includes(process.env.CAD_TEST_PHASE)) {
       // Fixture setup: an empty document and a dark application palette.
       await py('True', "App.newDocument('ReferenceCheck')");
       await sleep(800);
@@ -165,7 +165,7 @@ fs.mkdirSync(output, {recursive: true});
       near(model.features.find(o => o.type === 'PartDesign::Pocket').volume, 30000 - 500 * Math.PI);
       pass('FCStd save/reopen preserves parametric model');
       }
-      if (!['baseline','catalog'].includes(process.env.CAD_TEST_PHASE)) {
+      if (!['baseline','catalog','sketchtools'].includes(process.env.CAD_TEST_PHASE)) {
       // Additional fixture setup is explicit: geometry algorithms are tested
       // through the engine; plane/region selection and UI actions use real input.
       if (process.env.CAD_TEST_PHASE !== 'regions') {
@@ -319,7 +319,7 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
 
 
       }
-      if (!['baseline','workflows','regions'].includes(process.env.CAD_TEST_PHASE)) {
+      if (!['baseline','workflows','regions','sketchtools'].includes(process.env.CAD_TEST_PHASE)) {
       await py('True', "App.newDocument('CatalogCheck')");
       await sleep(600);
       async function runSearch(name) {
@@ -345,6 +345,41 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       assert.equal((await state()).is3DView,true);
       assert.equal(await py("any(w.isVisible() for w in Gui.getMainWindow().findChildren(QtWidgets.QToolBar) if not w.objectName().startswith('CAD_'))",'from PySide6 import QtWidgets'),false);
       pass('dedicated catalog -> Spreadsheet workbench -> real cell formula -> PartDesign -> new 3D view');
+      }
+      if (!['baseline','workflows','regions','catalog'].includes(process.env.CAD_TEST_PHASE)) {
+      await py('True', "App.newDocument('SketchToolsCheck')\nApp.ParamGet('User parameter:BaseApp/Preferences/Mod/Sketcher/Tools').SetInt('OnViewParameterVisibility',1)");
+      await sleep(500);
+      await click('CAD_Button_create_sketch'); await click('CAD_Button_start_sketch');
+      await py('True', 'Gui.activeDocument().activeView().getCameraNode().height.setValue(100)');
+      await press('r'); await sleep(600);
+      assert.equal(await py('cad_workspace.WORKSPACE.native_task_sketch'),true);
+      const methods = await py("[(b.objectName(),[b.itemText(i) for i in range(b.count())]) for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QComboBox) if b.isVisible()]",'from PySide6 import QtWidgets');
+      const rectangleMethod = await py("(lambda b:[b.mapToGlobal(b.rect().center()).x(),b.mapToGlobal(b.rect().center()).y()])(next(b for b in cad_workspace.WORKSPACE.native_task_widget.findChildren(QtWidgets.QComboBox) if b.isVisible() and b.count()==4 and any('3' in b.itemText(i) for i in range(b.count()))))",'from PySide6 import QtWidgets');
+      assert.ok(methods.length,'native construction methods must be exposed');
+      await page.mouse.click(...rectangleMethod); await press('Home'); await press('ArrowDown'); await press('ArrowDown'); await press('Enter');
+      async function sketchPoint(p, clickPoint=true) {
+        const xy = await py("(lambda w,p:[w.mapToGlobal(QtCore.QPoint(0,0)).x()+p[0],w.mapToGlobal(QtCore.QPoint(0,0)).y()+w.height()-1-p[1]])(next(w for w in Gui.getMainWindow().findChild(QtWidgets.QMdiArea).activeSubWindow().findChildren(QtWidgets.QWidget) if w.metaObject().className()=='Gui::View3DInventorViewer'),Gui.activeDocument().activeView().getPointOnScreen(App.Vector("+p.join(',')+")))",'from PySide6 import QtCore,QtWidgets');
+        if (clickPoint) await page.mouse.click(...xy); else await page.mouse.move(...xy);
+        await sleep(250);
+        return xy;
+      }
+      for (const p of [[-20,-10,0],[-5,-5,0],[-7,5,0]]) await sketchPoint(p);
+      await press('Escape'); await sleep(300);
+      assert.equal((await state()).geometryCount,4);
+      const area = await py("cad_profiles.regions(cad_workspace.sketch_in_edit(Gui))[0][1].Area",'import cad_profiles');
+      assert.ok(Math.abs(area-160)<6,'interactive 3-corner construction should follow the three picks');
+      await press('c'); await sleep(400);
+      await sketchPoint([20,0,0]); await sketchPoint([25,0,0],false);
+      await page.screenshot({path:path.join(output,'circle-before-tab.png')});
+      await press('Tab');
+      await press('Control+A'); await page.keyboard.type('6');
+      await press('Control+Enter');
+      await sketchPoint([25,0,0]); await press('Escape'); await sleep(300);
+      const dimensions = await py("[(c.Type,c.Value) for c in cad_workspace.sketch_in_edit(Gui).Constraints if c.Type in ('Radius','Diameter')]");
+      assert.ok(dimensions.some(d=>Math.abs(d[1]-6)<0.001),'on-view entry must create a native circle dimension');
+      await click('CAD_Action_finish');
+      assert.equal(await py('not bool(Gui.Control.activeDialog()) and Gui.activeDocument().getInEdit() is None'),true);
+      pass('embedded sketch controls -> interactive 3-corner construction -> on-view numeric circle dimension');
       }
       await page.screenshot({path: path.join(output, 'workspace.png')});
       fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ok: true, passed, model: await state()}, null, 2));
