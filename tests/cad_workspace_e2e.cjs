@@ -31,9 +31,13 @@ fs.mkdirSync(output, {recursive: true});
     page.setDefaultTimeout(60000);
     page.on('console', message => log.push(message.text()));
     page.on('pageerror', error => log.push('PAGEERROR: ' + error.message));
+    const fundraisingRequests=[];
+    page.on('request',request=>{if(/patreon|ko-fi|\/go\/kofi/i.test(request.url()))fundraisingRequests.push(request.url());});
     await page.goto('http://127.0.0.1:18791/', {waitUntil: 'domcontentloaded'});
     await page.waitForFunction(() => window.__cadReady || window.__cadFailed, {timeout: 240000});
     assert.equal(await page.evaluate(() => window.__cadFailed), undefined);
+    assert.doesNotMatch(await page.content(),/vtNudge|vt-nudge|patreon|ko-fi|vt\.support\.nudge/i);
+    assert.equal(await page.evaluate(()=>typeof window.vtNudge),'undefined');
 
     async function py(expression, statements = '') {
       await page.waitForFunction(() => !window.__fcPyBusy);
@@ -395,6 +399,27 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       assert.equal(await py('not bool(Gui.Control.activeDialog()) and Gui.activeDocument().getInEdit() is None'),true);
       pass('embedded sketch controls -> interactive 3-corner construction -> on-view numeric circle dimension');
       }
+      if (!process.env.CAD_TEST_PHASE) {
+        // Reproduce the visible multi-body/native Start Part state from the report.
+        // Import and model construction are explicit fixtures; Body creation and
+        // cancellation use the dedicated search UI and real keyboard input.
+        await py('True', "import Part\n_d=App.newDocument('NativeBodyCheck')\n_b=_d.addObject('PartDesign::Body','Body')\n_f=_b.newObject('PartDesign::Feature','Base')\n_f.Shape=Part.makeBox(20,30,40)\n_d.recompute()\n_d.saveAs('/tmp/native-body.FCStd')\n_d.mergeProject('/tmp/native-body.FCStd')\n_d.mergeProject('/tmp/native-body.FCStd')\n_d.recompute()");
+        const before=await py('[(o.Name,o.Shape.Volume) for o in App.ActiveDocument.findObjects("PartDesign::Body")]');
+        assert.equal(before.length,3);
+        for (let i=0;i<2;i++) {
+          await runSearch('native_PartDesign_Body');
+          await press('Escape'); await sleep(600);
+        }
+        await click('CAD_Action_fit');
+        const after=await py('[(o.Name,o.Shape.Volume) for o in App.ActiveDocument.findObjects("PartDesign::Body") if not o.Shape.isNull()]');
+        assert.deepEqual(after,before);
+        assert.equal(await py('len(App.ActiveDocument.findObjects("PartDesign::Body"))'),5);
+        pass('merged bodies -> repeated native Body command -> cancel -> original geometry remains intact');
+      }
+      assert.deepEqual(fundraisingRequests,[],'no fundraising requests');
+      const bridgeErrors=await page.evaluate(()=>window.__fcPyErrors||[]);
+      assert.deepEqual(bridgeErrors,[],'no rejected JSPI operations during acceptance flows');
+      assert.ok(!log.some(line=>/Maximum call stack size exceeded|PAGEERROR:/.test(line)),'no browser recursion or page errors');
       await page.screenshot({path: path.join(output, 'workspace.png')});
       fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ok: true, passed, model: await state()}, null, 2));
     } catch (error) {

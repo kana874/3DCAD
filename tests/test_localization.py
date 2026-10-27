@@ -32,5 +32,31 @@ class JapaneseLocalizationTests(unittest.TestCase):
         self.assertTrue((root/"play-gui/ja/fonts.json").is_file())
         self.assertTrue((root/"play-gui/ja/freecad-ja.js").is_file())
 
+    def test_fundraising_removed_on_fresh_and_already_localized_pages(self):
+        prompt = '''<div id="vtNudge" class="vt-nudge" hidden>
+          <p>Enjoying FreeCAD in your browser?</p><div class="row">
+          <a href="https://ko-fi.com/virtastic">Give once</a></div></div>
+          <script id="vt-nudge">window.vtNudge=function(){};
+          setInterval(function(){localStorage.setItem('vt.support.nudge','1')},30000);
+          </script>'''
+        extras = '''<style>
+ .vt-nudge{display:block}
+ .topbar .socials a.support{color:gold}
+ .model{display:block}
+</style><a href="https://www.patreon.com/virtastic">Support</a>
+<a href="/legal.html">Licenses</a><script>
+ if (rc === 0 && window.vtNudge) { window.vtNudge('solve'); }
+</script>'''
+        for base in (BASE, module.localize(BASE)):
+            result = module.localize(base.replace('</body>', prompt + extras + '</body>'))
+            self.assertNotRegex(result, r'vtNudge|vt-nudge|patreon|ko-fi|vt.support.nudge')
+            self.assertIn('.model{display:block}', result)
+            self.assertIn('<a href="/legal.html">Licenses</a>', result)
+            self.assertEqual(result, module.localize(result))
+
+    def test_unknown_fundraising_markup_blocks_release(self):
+        with self.assertRaisesRegex(ValueError, 'fundraising'):
+            module.localize(BASE.replace('</body>', '<button>Support on Patreon</button></body>'))
+
 if __name__ == "__main__":
     unittest.main()
