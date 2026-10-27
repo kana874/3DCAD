@@ -73,4 +73,69 @@
     link.href = recovery.href; link.textContent = '互換モードを開く';
     notice.append(link); document.body.append(notice);
   }
+  // Qt callbacks request a browser download through a transient MEMFS file.
+  async function fileRequest(request) {
+    if (request.operation === 'open') { window.fcwebOpen(); return; }
+    const ext=request.operation === 'save' ? '.FCStd' : '.step';
+    const filename=(request.label || 'design').replace(/[\\/:*?"<>|\x00-\x1f]/g,'_')+ext;
+    let handle=null;
+    if (window.showSaveFilePicker) {
+      try { handle=await window.showSaveFilePicker({suggestedName:filename,types:[{description:request.operation === 'save' ? 'FreeCAD' : 'STEP',accept:{'application/octet-stream':[ext]}}]}); }
+      catch (error) {
+        if (error.name==='AbortError') return;
+        if (error.name!=='SecurityError') throw error;
+      }
+    }
+    const fs = window.fcInstance.FS;
+    const tag = String(Date.now()) + '-' + String(Math.floor(Math.random() * 1000000));
+    const out = '/tmp/cad-export-' + tag + ext, status = out + '.json';
+    const payload = JSON.stringify({request, out, status});
+    const code = request.operation === 'save' ? `import json, os\n_r=json.loads(${JSON.stringify(payload)})\ntry:\n import FreeCAD as _a\n _d=_a.getDocument(_r['request']['document'])\n if _d is None: raise RuntimeError('設計が閉じられました。')\n _d.recompute()\n _d.saveCopy(_r['out'])\n if not os.path.isfile(_r['out']) or os.path.getsize(_r['out'])==0: raise RuntimeError('FCStdが作成されませんでした。')\n _result={'ok':True}\nexcept Exception as _e:\n _result={'ok':False,'error':str(_e)}\nwith open(_r['status'],'w',encoding='utf-8') as _f: json.dump(_result,_f,ensure_ascii=False)\n` : `import json, os\n_r=json.loads(${JSON.stringify(payload)})\ntry:\n import FreeCAD as _a, Import, cad_core\n _d=_a.getDocument(_r['request']['document'])\n if _d is None: raise RuntimeError('設計が閉じられました。')\n _scope=_r['request']['scope']\n _c=[_d.getObject(n) for n in _r['request']['selected']] if _scope=='selected' else list(_d.Objects)\n _objects=[]\n for _o in _c:\n  if _o is None: continue\n  _b=cad_core.body_of(_o)\n  _target=_b if _b else _o\n  if _scope=='visible' and not _target.ViewObject.Visibility: continue\n  if not _target.isDerivedFrom('Part::Feature') or _target.Shape.isNull(): continue\n  if _target not in _objects: _objects.append(_target)\n if not _objects: raise RuntimeError('書き出せるボディがありません。')\n _d.recompute()\n Import.export(_objects,_r['out'])\n if not os.path.isfile(_r['out']) or os.path.getsize(_r['out'])==0: raise RuntimeError('STEPが作成されませんでした。')\n _result={'ok':True}\nexcept Exception as _e:\n _result={'ok':False,'error':str(_e)}\nwith open(_r['status'],'w',encoding='utf-8') as _f: json.dump(_result,_f,ensure_ascii=False)\n`;
+    try {
+      for (let i=0; window.__fcPyBusy; i++) {
+        if (i > 600) throw new Error('CADの処理が終了しませんでした。');
+        await new Promise(resolve => setTimeout(resolve,100));
+      }
+      window.__fcRunPyGuarded(code);
+      let result;
+      for (let i=0; i<1200; i++) {
+        try { result=JSON.parse(new TextDecoder().decode(fs.readFile(status))); break; }
+        catch (_) { await new Promise(resolve => setTimeout(resolve,100)); }
+      }
+      if (!result) throw new Error('STEP作成がタイムアウトしました。');
+      if (!result.ok) throw new Error(result.error);
+      const bytes=fs.readFile(out);
+      if (handle) {
+        const writable=await handle.createWritable(); await writable.write(bytes); await writable.close();
+      } else {
+        const url=URL.createObjectURL(new Blob([bytes],{type:'application/octet-stream'}));
+        const link=document.createElement('a'); link.href=url; link.download=filename;
+        document.body.appendChild(link); link.click(); link.remove();
+        setTimeout(() => URL.revokeObjectURL(url),60000);
+      }
+      window.fcwebNotify?.(handle ? 'ファイルを保存しました。' : 'ダウンロードを開始しました。','info');
+    } catch (error) {
+      window.fcwebNotify?.('ファイルを保存できませんでした: '+error.message,'error');
+    } finally {
+      for (const p of [out,status]) { try { fs.unlink(p); } catch (_) {} }
+    }
+  }
+  setInterval(() => {
+    if (!window.fcInstance?.FS) return;
+    const fs=window.fcInstance.FS, path='/tmp/cad-file-request.json';
+    try {
+      const request=JSON.parse(new TextDecoder().decode(fs.readFile(path)));
+      fs.unlink(path); fileRequest(request).catch(error => window.fcwebNotify?.('ファイル操作に失敗しました: '+error.message,'error'));
+    } catch (_) {}
+  },300);
+  window.__cadSaveRequest = () => {
+    if (window.__fcPyBusy || !window.__cadReady) return;
+    window.__fcRunPyGuarded("import cad_workspace; cad_workspace.WORKSPACE.request_file_operation('save')");
+  };
+  window.addEventListener('beforeunload', event => {
+    try {
+      if (!window.fcInstance?.FS.analyzePath('/tmp/cad-open-documents').exists) return;
+      event.preventDefault(); event.returnValue='';
+    } catch (_) {}
+  });
 })();

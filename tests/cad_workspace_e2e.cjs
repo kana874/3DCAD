@@ -28,7 +28,12 @@ fs.mkdirSync(output, {recursive: true});
     });
     const page = await browser.newPage();
     await page.setViewport({width: 1600, height: 1000});
+    await page.evaluateOnNewDocument(() => { Object.defineProperty(window,'showSaveFilePicker',{value:undefined,configurable:true}); });
     page.setDefaultTimeout(60000);
+    const downloadDir=path.resolve(output,'downloads');
+    fs.mkdirSync(downloadDir,{recursive:true});
+    const cdp=await page.createCDPSession();
+    await cdp.send('Page.setDownloadBehavior',{behavior:'allow',downloadPath:downloadDir});
     page.on('console', message => log.push(message.text()));
     page.on('pageerror', error => log.push('PAGEERROR: ' + error.message));
     const fundraisingRequests=[];
@@ -417,6 +422,45 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.deepEqual(after,before);
         assert.equal(await py('len(App.ActiveDocument.findObjects("PartDesign::Body"))'),5);
         pass('merged bodies -> repeated native Body command -> cancel -> original geometry remains intact');
+      }
+      if (!process.env.CAD_TEST_PHASE) {
+        async function waitDownload(ext) {
+          for (let i=0;i<600;i++) {
+            const files=fs.readdirSync(downloadDir).filter(n=>n.toLowerCase().endsWith(ext));
+            if (files.length && !fs.readdirSync(downloadDir).some(n=>n.endsWith('.crdownload'))) return path.join(downloadDir,files[0]);
+            await sleep(100);
+          }
+          throw new Error('Timed out waiting for '+ext+' browser download');
+        }
+        assert.equal(await py("not hasattr(App,'_fcweb_saver')"),true,'CAD autosave must not start');
+        await click('CAD_Action_save');
+        const saved=await waitDownload('.fcstd');
+        assert.ok(fs.statSync(saved).size>500,'FCStd was downloaded to disk');
+        const chooserPromise=page.waitForFileChooser({timeout:30000});
+        await click('CAD_Action_open');
+        const chooser=await chooserPromise;
+        await chooser.accept([saved]);
+        let opened=false;
+        for (let i=0;i<80;i++) {
+          opened=await py("App.ActiveDocument is not None and App.ActiveDocument.Name!='NativeBodyCheck' and len(App.ActiveDocument.findObjects('PartDesign::Body'))==5");
+          if (opened) break;
+          await sleep(250);
+        }
+        assert.equal(opened,true,'downloaded FCStd must reopen through the real file picker');
+        assert.equal(await py("sum(1 for o in App.ActiveDocument.findObjects('PartDesign::Body') if not o.Shape.isNull())"),3);
+        assert.equal(await py("App.ActiveDocument.FileName.startswith('/tmp/_up/')"),true,'opened CAD data stays in transient storage');
+        pass('local FCStd download -> browser file picker -> reopen five bodies without browser CAD autosave');
+        await click('CAD_Action_export');
+        await next('export_scope'); await next('export_scope'); // all bodies
+        await click('CAD_Button_export_step');
+        const step=await waitDownload('.step');
+        const stepBytes=fs.readFileSync(step);
+        assert.ok(stepBytes.length>500,'STEP was downloaded to disk');
+        await page.evaluate(bytes=>window.fcInstance.FS.writeFile('/tmp/downloaded.step',new Uint8Array(bytes)),Array.from(stepBytes));
+        const info=await py("_step_info","import Part\n_shape=Part.read('/tmp/downloaded.step')\n_step_info={'solids':len(_shape.Solids),'volume':_shape.Volume}");
+        assert.equal(info.solids,3);
+        near(info.volume,72000);
+        pass('STEP export -> browser download -> read back three exact solids');
       }
       assert.deepEqual(fundraisingRequests,[],'no fundraising requests');
       const bridgeErrors=await page.evaluate(()=>window.__fcPyErrors||[]);

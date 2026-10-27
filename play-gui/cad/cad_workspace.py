@@ -168,6 +168,12 @@ class Workspace(QtCore.QObject):
             Gui.runCommand('Std_DlgPreferences')
         elif name == 'search':
             self.search_panel()
+        elif name == 'save':
+            self.request_file_operation('save')
+        elif name == 'open':
+            self.request_file_operation('open')
+        elif name == 'export':
+            self.export_panel()
         elif name == 'grid':
             sketch = sketch_in_edit(Gui)
             if sketch and hasattr(sketch.ViewObject, 'ShowGrid'):
@@ -481,6 +487,27 @@ class Workspace(QtCore.QObject):
 
     def value(self, name, positive=True):
         return length(App, self.fields[name].text(), positive)
+
+    def request_file_operation(self, operation, scope='visible'):
+        doc = App.ActiveDocument
+        if operation != 'open' and doc is None:
+            raise CadError('保存する設計がありません。')
+        selected = [o.Name for o in Gui.Selection.getSelection()] if doc else []
+        if operation == 'step' and scope == 'selected' and not selected:
+            raise CadError('書き出すボディを選択してください。')
+        request = {'operation': operation, 'document': doc.Name if doc else None,
+                   'label': doc.Label if doc else '', 'scope': scope, 'selected': selected}
+        with open('/tmp/cad-file-request.json', 'w', encoding='utf-8') as out:
+            json.dump(request, out, ensure_ascii=False)
+        self.status('ブラウザのファイル操作を続けてください。')
+
+    def export_panel(self):
+        self.clear_panel('STEPを書き出し')
+        self.combo('export_scope', '対象', [('表示中のボディ', 'visible'),
+                   ('選択したボディ', 'selected'), ('すべてのボディ', 'all')])
+        self.button('STEPとして保存', lambda: self.request_file_operation(
+            'step', self.fields['export_scope'].currentData()), 'export_step')
+        self.button('キャンセル', self.home, 'export_cancel')
 
     def home(self):
         self.close_plane_picker()
@@ -1147,6 +1174,18 @@ class Workspace(QtCore.QObject):
     def sync(self):
         self.dirty = False
         doc = App.ActiveDocument
+        # Browser close/reload must not silently discard an open design now
+        # that CAD autosave is disabled. The marker is session-only MEMFS.
+        try:
+            if App.listDocuments():
+                with open('/tmp/cad-open-documents', 'w') as marker:
+                    marker.write('1')
+            else:
+                import os
+                if os.path.exists('/tmp/cad-open-documents'):
+                    os.remove('/tmp/cad-open-documents')
+        except OSError:
+            pass
         edit = sketch_in_edit(Gui)
         locked = self.session is not None or (self.native_task_active and not self.native_task_sketch)
         is_3d = bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph'))
