@@ -84,6 +84,7 @@ jobs:
           test -s _site/cad/cad_selection.py
           test -s _site/cad/cad_profiles.py
           test -s _site/cad/cad_commands.py
+          test -s _site/cad/cad_catalog.py
           grep -q '/cad/workspace.js' _site/index.html
           grep -q '/fusion/design-palette.js' _site/index.html
           grep -q '/fusion/fusion-mode.js' _site/index.html

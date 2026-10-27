@@ -89,7 +89,7 @@ fs.mkdirSync(output, {recursive: true});
     function pass(label) { passed.push(label); console.log('PASS', label); }
     try {
       let model;
-      if (!['workflows','regions'].includes(process.env.CAD_TEST_PHASE)) {
+      if (!['workflows','regions','catalog'].includes(process.env.CAD_TEST_PHASE)) {
       // Fixture setup: an empty document and a dark application palette.
       await py('True', "App.newDocument('ReferenceCheck')");
       await sleep(800);
@@ -165,7 +165,7 @@ fs.mkdirSync(output, {recursive: true});
       near(model.features.find(o => o.type === 'PartDesign::Pocket').volume, 30000 - 500 * Math.PI);
       pass('FCStd save/reopen preserves parametric model');
       }
-      if (process.env.CAD_TEST_PHASE !== 'baseline') {
+      if (!['baseline','catalog'].includes(process.env.CAD_TEST_PHASE)) {
       // Additional fixture setup is explicit: geometry algorithms are tested
       // through the engine; plane/region selection and UI actions use real input.
       if (process.env.CAD_TEST_PHASE !== 'regions') {
@@ -318,6 +318,33 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       pass('history -> reselect region -> repair an invalid profile with real mouse input');
 
 
+      }
+      if (!['baseline','workflows','regions'].includes(process.env.CAD_TEST_PHASE)) {
+      await py('True', "App.newDocument('CatalogCheck')");
+      await sleep(600);
+      async function runSearch(name) {
+        await click('CAD_Action_search');
+        await fill('search',name);
+        await click('CAD_Button_search_run');
+        await sleep(600);
+      }
+      await runSearch('workbench_SpreadsheetWorkbench');
+      assert.ok(await py("'native_Spreadsheet_CreateSheet' in cad_workspace.WORKSPACE.native_actions"));
+      await runSearch('native_Spreadsheet_CreateSheet');
+      assert.equal(await py("len(App.ActiveDocument.findObjects('Spreadsheet::Sheet'))"),1);
+      assert.equal((await state()).is3DView,false);
+      assert.equal(await py('cad_workspace.WORKSPACE.reference_root is None'),true);
+      // A1 center in the fixed 1600x1000 spreadsheet viewport.
+      const cell = [350,134];
+      await page.mouse.click(...cell); await press('F2'); await page.keyboard.type('=2+3'); await press('Enter'); await sleep(600);
+      assert.equal(Number(await py("App.ActiveDocument.findObjects('Spreadsheet::Sheet')[0].get('A1')")),5);
+      await page.mouse.click(350,165); await page.keyboard.type('Sketch'); await press('Enter'); await sleep(400);
+      assert.equal(await py("App.ActiveDocument.findObjects('Spreadsheet::Sheet')[0].get('A2')"),'Sketch');
+      await runSearch('workbench_PartDesignWorkbench');
+      await runSearch('new_3d_view');
+      assert.equal((await state()).is3DView,true);
+      assert.equal(await py("any(w.isVisible() for w in Gui.getMainWindow().findChildren(QtWidgets.QToolBar) if not w.objectName().startswith('CAD_'))",'from PySide6 import QtWidgets'),false);
+      pass('dedicated catalog -> Spreadsheet workbench -> real cell formula -> PartDesign -> new 3D view');
       }
       await page.screenshot({path: path.join(output, 'workspace.png')});
       fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ok: true, passed, model: await state()}, null, 2));

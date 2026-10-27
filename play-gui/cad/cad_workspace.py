@@ -14,7 +14,7 @@ from cad_core import (CadError, ExtrusionSession, add_circle, add_rectangle,
                       body_of, create_sketch, length, selected_sketch,
                       sketch_in_edit, transaction, valid_shape)
 
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 WORKSPACE = None
 
 
@@ -100,6 +100,8 @@ class Workspace(QtCore.QObject):
         self.build_history()
         self.build_view_menu()
         self.build_command_menus()
+        from cad_catalog import CommandCatalog
+        self.catalog = CommandCatalog(self)
         self.observer = Observer(self)
         Gui.Selection.addObserver(self.observer)
         App.addDocumentObserver(self.observer)
@@ -172,6 +174,13 @@ class Workspace(QtCore.QObject):
             else:
                 self.grid_visible = not self.grid_visible
                 self.update_references()
+        elif name in self.catalog.workbenches:
+            if Gui.activeDocument() and Gui.activeDocument().getInEdit():
+                raise CadError('現在の編集を終了してから機能を切り替えてください。')
+            self.close_plane_picker()
+            self.catalog.activate(name)
+        elif name == 'new_3d_view':
+            Gui.runCommand('Std_ViewCreate')
         elif name in self.native_actions:
             self.close_plane_picker()
             command, sketch_only = self.native_actions[name]
@@ -911,15 +920,28 @@ class Workspace(QtCore.QObject):
         self.clear_panel('コマンド検索')
         query = self.field('search', '検索', '')
         results = QtWidgets.QListWidget()
+        results.setObjectName('CAD_SearchResults')
         self.form.addRow(results)
         def filter_actions(text):
             results.clear()
             for name, action in self.actions.items():
-                if name not in ('search', 'cancel') and text.lower() in action.text().lower():
+                if name not in ('search', 'cancel') and (text.lower() in action.text().lower() or text.lower() in name.lower()):
                     item = QtWidgets.QListWidgetItem(action.text())
                     item.setData(QtCore.Qt.UserRole, name)
                     results.addItem(item)
-        results.itemDoubleClicked.connect(lambda item: self.route(item.data(QtCore.Qt.UserRole)))
+            if results.count():
+                results.setCurrentRow(0)
+        def run_result():
+            item = results.currentItem()
+            if item:
+                name = item.data(QtCore.Qt.UserRole)
+                if not self.actions[name].isEnabled():
+                    self.status('現在の文書・編集中の状態では利用できない機能です。', True)
+                    return
+                self.route(name)
+        results.itemActivated.connect(lambda *_: run_result())
+        query.returnPressed.connect(run_result)
+        self.button('実行', run_result, 'search_run')
         query.textChanged.connect(filter_actions)
         filter_actions('')
         query.setFocus()
@@ -992,7 +1014,7 @@ class Workspace(QtCore.QObject):
         # Scene-only references never enter the document, STEP or FCStd files.
         from pivy import coin
         view = Gui.activeDocument().activeView() if Gui.activeDocument() else None
-        scene = view.getSceneGraph() if view else None
+        scene = view.getSceneGraph() if view and hasattr(view, 'getSceneGraph') else None
         if scene != self.reference_scene:
             self.detach_references()
             if scene is not None:
@@ -1039,7 +1061,7 @@ class Workspace(QtCore.QObject):
         # Keep reference geometry out of the model's fit-to-view bounds.
         from pivy import coin
         view = Gui.activeDocument().activeView() if Gui.activeDocument() else None
-        if view is None:
+        if view is None or not hasattr(view, 'fitAll'):
             return
         self.update_references()
         root = self.reference_root
@@ -1051,6 +1073,17 @@ class Workspace(QtCore.QObject):
         finally:
             if root is not None:
                 root.whichChild = previous
+
+    def hide_native_chrome(self):
+        for bar in self.main.findChildren(QtWidgets.QToolBar):
+            if not bar.objectName().startswith('CAD_'):
+                bar.hide()
+        for dock in self.main.findChildren(QtWidgets.QDockWidget):
+            if not dock.objectName().startswith('CAD_'):
+                dock.hide()
+        for widget in self.main.findChildren(QtWidgets.QWidget):
+            if 'OverlayTabWidget' in widget.metaObject().className():
+                widget.hide()
 
     def tick(self):
         try:
@@ -1067,23 +1100,14 @@ class Workspace(QtCore.QObject):
             self.update_theme()
             self.update_references()
             signature = (doc.Name if doc else None, edit.Name if edit else None,
-                         bool(Gui.activeDocument() and Gui.activeDocument().getInEdit()))
+                         bool(Gui.activeDocument() and Gui.activeDocument().getInEdit()),
+                         bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph')))
             if signature != self.signature:
                 self.signature = signature
                 self.dirty = True
-                if Gui.activeDocument():
+                if Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'setNavigationType'):
                     Gui.activeDocument().activeView().setNavigationType('Gui::RevitNavigationStyle')
-                # Workbench activation and setEdit can show native bars/docks
-                # again. Reconcile on state changes, not on every paint event.
-                for bar in self.main.findChildren(QtWidgets.QToolBar):
-                    if not bar.objectName().startswith('CAD_'):
-                        bar.hide()
-                for dock in self.main.findChildren(QtWidgets.QDockWidget):
-                    if not dock.objectName().startswith('CAD_'):
-                        dock.hide()
-                for widget in self.main.findChildren(QtWidgets.QWidget):
-                    if 'OverlayTabWidget' in widget.metaObject().className():
-                        widget.hide()
+                self.hide_native_chrome()
                 if not self.session and not self.current_command:
                     self.sketch_home(edit) if edit else self.home()
             if self.session and doc != self.session.doc:
@@ -1099,6 +1123,7 @@ class Workspace(QtCore.QObject):
         doc = App.ActiveDocument
         edit = sketch_in_edit(Gui)
         locked = self.session is not None or self.native_task_active
+        is_3d = bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph'))
         for name, action in self.actions.items():
             action.setEnabled(not locked or name == 'cancel')
         # Native Sketcher must receive Esc while drawing; only the extrusion
@@ -1109,8 +1134,12 @@ class Workspace(QtCore.QObject):
             self.actions[name].setEnabled(not locked and bool(edit if sketch_only else doc))
         for name in ('rectangle_center_exact', 'rectangle_three_points', 'circle_two_points', 'sketch_settings'):
             self.actions[name].setEnabled(bool(edit) and not locked)
-        for name in ('extrude', 'fillet', 'chamfer', 'fit', 'save', 'export', 'grid'):
+        for name in ('save', 'export'):
             self.actions[name].setEnabled(bool(doc) and not locked)
+        for name in ('extrude', 'fillet', 'chamfer', 'fit', 'grid'):
+            self.actions[name].setEnabled(is_3d and not locked)
+        self.actions['sketch'].setEnabled((not doc or is_3d) and not locked)
+        self.actions['new_3d_view'].setEnabled(bool(doc) and not locked)
         self.syncing = True
         previous_block = self.tree.blockSignals(True)
         try:
@@ -1197,7 +1226,7 @@ class Workspace(QtCore.QObject):
                 return obj.Shape.Volume if not obj.Shape.isNull() else None
             except Exception:
                 return None
-        return {'version': VERSION, 'document': doc.Name if doc else None,
+        return {'is3DView': bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph')), 'nativeCommandCount': len(self.native_actions), 'version': VERSION, 'document': doc.Name if doc else None,
                 'sketch': getattr(sketch_in_edit(Gui), 'Name', None),
                 'geometryCount': getattr(sketch_in_edit(Gui), 'GeometryCount', None),
                 'message': self.message.text(),
@@ -1233,7 +1262,7 @@ class Workspace(QtCore.QObject):
         preferences = App.ParamGet('User parameter:BaseApp/Preferences/View')
         preferences.SetString('NavigationStyle', self.previous_navigation)
         preferences.SetBool('ZoomAtCursor', self.previous_zoom)
-        if Gui.activeDocument():
+        if Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'setNavigationType'):
             Gui.activeDocument().activeView().setNavigationType(self.previous_navigation)
         self.deleteLater()
         global WORKSPACE
@@ -1268,6 +1297,9 @@ class Workspace(QtCore.QObject):
             return False
         focus = QtWidgets.QApplication.focusWidget()
         text_input = isinstance(focus, (QtWidgets.QLineEdit, QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit, QtWidgets.QAbstractSpinBox))
+        mdi = self.main.findChild(QtWidgets.QMdiArea)
+        if focus and mdi and mdi.isAncestorOf(focus) and Gui.activeDocument() and not hasattr(Gui.activeDocument().activeView(), 'getSceneGraph'):
+            text_input = True
         blocked_modifiers = QtCore.Qt.ControlModifier | QtCore.Qt.AltModifier | QtCore.Qt.MetaModifier
         name = None
         if not text_input and not event.modifiers() & blocked_modifiers:
