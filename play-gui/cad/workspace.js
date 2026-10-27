@@ -5,7 +5,7 @@
   const query = new URLSearchParams(location.search);
   if (query.get('workspace') !== 'fusion' || query.get('fusionMode') === 'off') return;
   const base = new URL('./', document.currentScript.src);
-  const files = ['cad_core.py', 'cad_workspace.py'];
+  const files = ['cad_core.py', 'cad_selection.py', 'cad_profiles.py', 'cad_commands.py', 'cad_workspace.py'];
   const directory = '/home/web_user/.cad-workspace';
   let started = false;
   const fontPrepared = () => {

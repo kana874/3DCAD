@@ -116,10 +116,12 @@ def create_sketch(app, gui, plane='XY', face_selection=None):
     return sketch
 
 
-def add_rectangle(app, sketch, width, height, x=0.0, y=0.0):
+def add_rectangle(app, sketch, width, height, x=0.0, y=0.0, center=False):
     import Part
     import Sketcher
     v = app.Vector
+    if center:
+        x, y = x - width / 2, y - height / 2
     corners = [v(x, y, 0), v(x + width, y, 0),
                v(x + width, y + height, 0), v(x, y + height, 0)]
     with transaction(sketch.Document, '寸法付き長方形'):
@@ -131,6 +133,10 @@ def add_rectangle(app, sketch, width, height, x=0.0, y=0.0):
             sketch.addConstraint(Sketcher.Constraint('Horizontal' if i % 2 == 0 else 'Vertical', start + i))
         sketch.addConstraint(Sketcher.Constraint('Distance', start, width))
         sketch.addConstraint(Sketcher.Constraint('Distance', start + 1, height))
+        if center:
+            point = sketch.addGeometry(Part.Point(v(x + width / 2, y + height / 2, 0)), True)
+            sketch.addConstraint(Sketcher.Constraint('Symmetric', start, 1, start + 2, 1, point, 1))
+            sketch.addConstraint(Sketcher.Constraint('Block', point))
 
 
 def add_circle(app, sketch, diameter, x=0.0, y=0.0):
@@ -172,6 +178,10 @@ class ExtrusionSession:
         self.visibility = {o.Name: o.ViewObject.Visibility for o in self.doc.Objects}
         self.closed = False
         self.preview = None
+        self.region_candidates = None
+        self.region_keys = None
+        self.use_source_sketch = False
+        self.boundaries = []
         self.doc.openTransaction('押し出し')
         # A long-lived preview must never enter the browser's recovery copy.
         # Resume the existing autosaver on both commit and abort; don't replace
@@ -202,10 +212,17 @@ class ExtrusionSession:
                 raise CadError('貫通は既存ボディの片側切り取りで指定してください。')
             bounds = self.previous.Shape.BoundBox
             distance = bounds.DiagonalLength + (self.sketch.Placement.Base - bounds.Center).Length + 1
-        wires = self.sketch.Shape.Wires
-        if not wires or any(not wire.isClosed() for wire in wires):
-            raise CadError('輪郭が閉じていません。スケッチの端点を確認してください。')
-        face = Part.makeFace(wires, 'Part::FaceMakerBullseye')
+        if self.region_candidates is not None:
+            if not self.region_keys:
+                raise CadError('押し出す領域をクリック、または一覧から選択してください。')
+            selected = [dict(self.region_candidates)[key] for key in self.region_keys]
+            face = selected[0].multiFuse(selected[1:]).removeSplitter() if len(selected) > 1 else selected[0].copy()
+            face.Placement = self.sketch.Placement.multiply(face.Placement)
+        else:
+            wires = self.sketch.Shape.Wires
+            if not wires or any(not wire.isClosed() for wire in wires):
+                raise CadError('輪郭が閉じていません。スケッチの端点を確認してください。')
+            face = Part.makeFace(wires, 'Part::FaceMakerBullseye')
         normal = self.sketch.Placement.Rotation.multVec(self.app.Vector(0, 0, 1))
         direction = normal * (-distance if reversed else distance)
         if symmetric:
@@ -220,8 +237,6 @@ class ExtrusionSession:
             if abs(result.Volume - self.previous.Shape.Volume) < 1e-7:
                 raise CadError('切り取りがボディと交差していません。方向を反転してください。')
         elif operation == 'new':
-            if self.previous is not None:
-                raise CadError('既存ボディのスケッチから新規ボディを作る機能は準備中です。')
             result = tool
         else:
             raise CadError('未対応の操作です。')
@@ -235,7 +250,7 @@ class ExtrusionSession:
         self.preview.Shape = result
         self.preview.ViewObject.Visibility = True
         if self.previous:
-            self.previous.ViewObject.Visibility = False
+            self.previous.ViewObject.Visibility = operation == 'new'
         self.doc.recompute()
         return result
 
@@ -245,8 +260,18 @@ class ExtrusionSession:
             self.doc.removeObject(self.preview.Name)
             self.preview = None
             kind = 'PartDesign::Pocket' if operation == 'cut' else 'PartDesign::Pad'
-            feature = self.body.newObject(kind, 'Pocket' if operation == 'cut' else 'Pad')
-            feature.Profile = self.sketch
+            target_body = self.body
+            separate_body = operation == 'new' and self.previous is not None
+            if separate_body:
+                target_body = self.doc.addObject('PartDesign::Body', 'Body')
+                target_body.Label = '新規ボディ'
+            profile = self.sketch
+            if self.region_candidates is not None and (not self.use_source_sketch or separate_body):
+                from cad_profiles import make_profile
+                profile = make_profile(target_body, self.sketch, self.boundaries, self.region_keys)
+                target_body.Tip = None if separate_body else (self.previous or self.sketch)
+            feature = target_body.newObject(kind, 'Pocket' if operation == 'cut' else 'Pad')
+            feature.Profile = profile
             feature.Length = distance
             if through:
                 feature.Type = 1  # Native Pocket: Through all (parametric).
@@ -260,11 +285,15 @@ class ExtrusionSession:
             self.doc.recompute()
             valid_shape(feature.Shape)
             feature.Label = '切り取り' if operation == 'cut' else '押し出し'
+            profile.ViewObject.Visibility = False
             self.sketch.ViewObject.Visibility = False
-            if self.previous:
+            if self.previous and not separate_body:
                 self.previous.ViewObject.Visibility = False
+            elif self.previous:
+                self.body.Tip = self.previous
+                self.previous.ViewObject.Visibility = True
             feature.ViewObject.Visibility = True
-            self.body.Tip = feature
+            target_body.Tip = feature
             self.doc.commitTransaction()
             self.closed = True
             self._resume_saving()
@@ -286,3 +315,39 @@ class ExtrusionSession:
         finally:
             self.closed = True
             self._resume_saving()
+
+
+def add_three_point_rectangle(app, sketch, x1, y1, x2, y2, x3, y3):
+    """First two points define the base; the third defines signed height."""
+    import Part
+    import Sketcher
+    dx, dy = x2 - x1, y2 - y1
+    width = math.hypot(dx, dy)
+    if width <= 1e-6:
+        raise CadError('矩形の最初の2点を離してください。')
+    ux, uy = dx / width, dy / width
+    height = -(x3 - x2) * uy + (y3 - y2) * ux
+    if abs(height) <= 1e-6:
+        raise CadError('3点目を底辺から離してください。')
+    a = app.Vector(x1, y1, 0)
+    b = app.Vector(x2, y2, 0)
+    offset = app.Vector(-uy * height, ux * height, 0)
+    corners = [a, b, b + offset, a + offset]
+    with transaction(sketch.Document, '3点矩形'):
+        start = sketch.GeometryCount
+        for i in range(4):
+            sketch.addGeometry(Part.LineSegment(corners[i], corners[(i + 1) % 4]), False)
+        for i in range(4):
+            sketch.addConstraint(Sketcher.Constraint('Coincident', start + i, 2, start + (i + 1) % 4, 1))
+        sketch.addConstraint(Sketcher.Constraint('Parallel', start, start + 2))
+        sketch.addConstraint(Sketcher.Constraint('Parallel', start + 1, start + 3))
+        sketch.addConstraint(Sketcher.Constraint('Perpendicular', start, start + 1))
+        sketch.addConstraint(Sketcher.Constraint('Distance', start, width))
+        sketch.addConstraint(Sketcher.Constraint('Distance', start + 1, abs(height)))
+
+
+def add_two_point_circle(app, sketch, x1, y1, x2, y2):
+    diameter = math.hypot(x2 - x1, y2 - y1)
+    if diameter <= 1e-6:
+        raise CadError('円の直径を定義する2点を離してください。')
+    add_circle(app, sketch, diameter, (x1 + x2) / 2, (y1 + y2) / 2)

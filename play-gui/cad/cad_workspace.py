@@ -5,6 +5,7 @@ Install once after the application and translations are ready. Widgets, native
 selection and shortcuts share Qt's own event loop; no DOM pointer injection.
 """
 import json
+import time
 from functools import partial
 import FreeCAD as App
 import FreeCADGui as Gui
@@ -13,7 +14,7 @@ from cad_core import (CadError, ExtrusionSession, add_circle, add_rectangle,
                       body_of, create_sketch, length, selected_sketch,
                       sketch_in_edit, transaction, valid_shape)
 
-VERSION = '0.1.1'
+VERSION = '0.2.0'
 WORKSPACE = None
 
 
@@ -41,9 +42,17 @@ class Observer:
 
 class Workspace(QtCore.QObject):
     def __init__(self):
+        from cad_profiles import restore_proxies
+        restore_proxies()
         self.main = Gui.getMainWindow()
         super().__init__(self.main)
         self.dirty = True
+        self.native_task_pending = False
+        self.native_task_widget = None
+        self.native_task_dock = None
+        self.native_actions = {}
+        self.region_picker = None
+        self.plane_picker = None
         self.reference_scene = None
         self.reference_root = None
         self.grid_visible = True
@@ -56,6 +65,9 @@ class Workspace(QtCore.QObject):
         self.saved_shortcuts = {}
         self.saved_visibility = []
         self.signature = None
+        self.last_history_click = None
+        self.history_event_time = None
+        self.history_signature = None
         self.tree_signature = None
         self.tree_items = {}
         self.editing = False
@@ -86,6 +98,8 @@ class Workspace(QtCore.QObject):
         self.build_tree()
         self.build_panel()
         self.build_history()
+        self.build_view_menu()
+        self.build_command_menus()
         self.observer = Observer(self)
         Gui.Selection.addObserver(self.observer)
         App.addDocumentObserver(self.observer)
@@ -100,6 +114,7 @@ class Workspace(QtCore.QObject):
         self.sync()
         self.home()
         self.status('専用ワークスペースを起動しました。スケッチから始めてください。')
+        self.restore_panel_preferences()
 
     def status(self, text, error=False):
         self.message.setText(text)
@@ -118,6 +133,9 @@ class Workspace(QtCore.QObject):
             self.dirty = True
 
     def route(self, name, *_):
+        if self.native_task_active and name not in ('cancel', 'layout_reset', 'show_browser', 'show_design', 'show_history'):
+            self.status('現在の操作を確定またはキャンセルしてください。', True)
+            return
         if self.session and name not in ('cancel',):
             self.status('押し出しを確定するか、キャンセルしてください。', True)
             return
@@ -135,8 +153,16 @@ class Workspace(QtCore.QObject):
             self.finish_sketch()
         elif name == 'extrude':
             self.extrude_panel()
-        elif name in ('rectangle_exact', 'circle_exact'):
+        elif name in ('rectangle_exact', 'rectangle_center_exact', 'circle_exact'):
             self.geometry_panel(name)
+        elif name in ('rectangle_three_points', 'circle_two_points'):
+            self.point_geometry_panel(name)
+        elif name == 'sketch_settings':
+            self.sketch_settings_panel()
+        elif name == 'measure':
+            self.measure_panel()
+        elif name == 'preferences':
+            Gui.runCommand('Std_DlgPreferences')
         elif name == 'search':
             self.search_panel()
         elif name == 'grid':
@@ -146,6 +172,14 @@ class Workspace(QtCore.QObject):
             else:
                 self.grid_visible = not self.grid_visible
                 self.update_references()
+        elif name in self.native_actions:
+            self.close_plane_picker()
+            command, sketch_only = self.native_actions[name]
+            if sketch_only and not sketch_in_edit(Gui):
+                raise CadError('スケッチを作成・編集してから実行してください。')
+            if not sketch_only:
+                self.show_native_tasks()
+            Gui.runCommand(command)
         elif name == 'cancel':
             self.cancel()
         elif name in ('undo', 'redo'):
@@ -155,10 +189,12 @@ class Workspace(QtCore.QObject):
                 self.home()
         elif name == 'fit':
             self.fit_view()
-        elif name == 'classic':
-            self.stop()
+        elif name == 'layout_reset':
+            self.restore_layout()
+        elif name.startswith('show_'):
+            getattr(self, {'show_browser': 'tree_dock', 'show_design': 'panel_dock', 'show_history': 'history_dock'}[name]).show()
         else:
-            commands = {'line': 'Sketcher_CreateLine', 'rectangle': 'Sketcher_CreateRectangle',
+            commands = {'line': 'Sketcher_CreatePolyline', 'rectangle': 'Sketcher_CreateRectangle',
                         'circle': 'Sketcher_CreateCircle', 'dimension': 'Sketcher_Dimension',
                         'trim': 'Sketcher_Trimming', 'construction': 'Sketcher_ToggleConstruction',
                         'fillet': 'PartDesign_Fillet', 'chamfer': 'PartDesign_Chamfer',
@@ -201,7 +237,7 @@ class Workspace(QtCore.QObject):
             [('line', '線 L', 'L'), ('rectangle', '長方形 R', 'R'), ('circle', '円 C', 'C'),
              ('dimension', '寸法 D', 'D'), ('trim', 'トリム T', 'T'), ('construction', '補助線 X', 'X')],
             [('extrude', '押し出し E', 'E'), ('fillet', 'フィレット F', 'F'), ('chamfer', '面取り', None)],
-            [('search', '検索 S', 'S'), ('grid', '原点・グリッド', None), ('fit', '全体表示', None), ('classic', '標準GUI', None)]
+            [('search', '検索 S', 'S'), ('grid', '原点・グリッド', None), ('fit', '全体表示', None)]
         ]
         for group in groups:
             if bar.actions():
@@ -210,6 +246,119 @@ class Workspace(QtCore.QObject):
                 bar.addAction(self.action(name, title, key))
         self.action('cancel', 'キャンセル', 'Esc')
         self.bar = bar
+
+    def build_command_menus(self):
+        from cad_commands import SKETCH_TOOLS
+        available = set(Gui.listCommands())
+        def adapter(menu, title, command, sketch_only):
+            if command not in available:
+                return
+            name = 'native_' + command
+            if name not in self.actions:
+                self.native_actions[name] = (command, sketch_only)
+                self.action(name, title)
+            menu.addAction(self.actions[name])
+        def add_menu(title, menu):
+            button = QtWidgets.QToolButton(self.bar)
+            button.setText(title)
+            button.setMenu(menu)
+            button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+            self.bar.addWidget(button)
+        sketch = QtWidgets.QMenu('作図', self.bar)
+        for title, commands in SKETCH_TOOLS:
+            submenu = sketch.addMenu(title)
+            for label, command in commands:
+                adapter(submenu, label, command, True)
+        sketch.addSeparator()
+        sketch.addAction(self.action('rectangle_three_points', '3点矩形（座標指定）'))
+        sketch.addAction(self.action('circle_two_points', '2点円（直径の両端を座標指定）'))
+        sketch.addAction(self.action('sketch_settings', 'スケッチ表示・スナップ設定'))
+        sketch.addAction(self.action('rectangle_center_exact', '中心・幅・高さを数値指定'))
+        add_menu('作図', sketch)
+        for title, prefix in [('修正・拘束', 'Sketcher_'), ('ソリッド', 'PartDesign_'), ('形状・検査', 'Part_')]:
+            menu = QtWidgets.QMenu(title, self.bar)
+            for command in sorted(available):
+                if not command.startswith(prefix) or command.startswith(prefix + 'Comp') or (prefix == 'Sketcher_' and command.startswith('Sketcher_Create')):
+                    continue
+                try:
+                    label = Gui.Command.get(command).getInfo().get('menuText', command).replace('&', '')
+                    label = QtCore.QCoreApplication.translate(command, label)
+                except Exception:
+                    label = command
+                adapter(menu, label, command, prefix == 'Sketcher_')
+            add_menu(title, menu)
+
+    def measure_panel(self):
+        self.clear_panel('測定')
+        import Part
+        shapes = []
+        for selection in Gui.Selection.getSelectionEx():
+            for shape in selection.SubObjects or [getattr(selection.Object, 'Shape', Part.Shape())]:
+                if not shape.isNull():
+                    shapes.append(shape)
+        if not shapes:
+            self.form.addRow(QtWidgets.QLabel('形状・面・エッジ・頂点を選択して、もう一度測定してください。'))
+        for i, shape in enumerate(shapes):
+            label = QtWidgets.QLabel('形状 %d\n長さ %.6g mm\n面積 %.6g mm²\n体積 %.6g mm³' % (i + 1, shape.Length, shape.Area, shape.Volume))
+            label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            self.form.addRow(label)
+        if len(shapes) == 2:
+            self.form.addRow('最短距離', QtWidgets.QLabel('%.6g mm' % shapes[0].distToShape(shapes[1])[0]))
+        self.button('選択を測定し直す', self.measure_panel, 'measure_refresh')
+        self.button('閉じる', self.home, 'measure_close')
+
+    def sketch_settings_panel(self):
+        sketch = sketch_in_edit(Gui)
+        if not sketch:
+            raise CadError('スケッチ編集中に設定してください。')
+        self.clear_panel('スケッチ設定')
+        titles = {'ShowGrid': 'グリッド表示', 'GridSnap': 'グリッドにスナップ', 'GridAuto': 'グリッド間隔を自動調整', 'ShowConstraints': '拘束を表示', 'ShowAxes': '軸を表示', 'ShowPoints': '点を表示'}
+        for name in sketch.ViewObject.PropertiesList:
+            if (name.startswith('Show') or name in titles) and isinstance(getattr(sketch.ViewObject, name), bool):
+                box = QtWidgets.QCheckBox(titles.get(name, name))
+                box.setChecked(getattr(sketch.ViewObject, name))
+                box.toggled.connect(lambda value, prop=name: setattr(sketch.ViewObject, prop, value))
+                self.form.addRow(box)
+        self.button('戻る', self.sketch_home, 'settings_back')
+
+    def build_view_menu(self):
+        menu = QtWidgets.QMenu('表示', self.bar)
+        for dock in (self.tree_dock, self.panel_dock, self.history_dock):
+            menu.addAction(dock.toggleViewAction())
+        menu.addSeparator()
+        menu.addAction(self.action('layout_reset', 'レイアウトを初期化'))
+        menu.addAction(self.action('preferences', '設定'))
+        menu.addAction(self.action('measure', '選択形状を測定'))
+        for name, title in [('show_browser', 'ブラウザを表示'), ('show_design', 'デザインを表示'), ('show_history', '履歴を表示')]:
+            self.action(name, title)
+        button = QtWidgets.QToolButton(self.bar)
+        button.setText('表示')
+        button.setObjectName('CAD_ViewMenu')
+        button.setMenu(menu)
+        button.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.bar.addWidget(button)
+
+    def restore_panel_preferences(self):
+        params = App.ParamGet('User parameter:BaseApp/Preferences/CADWorkspace')
+        for dock in (self.tree_dock, self.panel_dock, self.history_dock):
+            dock.setVisible(params.GetBool(dock.objectName() + 'Visible', True))
+            dock.visibilityChanged.connect(lambda visible, name=dock.objectName(): params.SetBool(name + 'Visible', visible))
+        widths = [max(185, min(500, params.GetInt('BrowserWidth', 240))),
+                  max(245, min(600, params.GetInt('DesignWidth', 320)))]
+        self.main.resizeDocks([self.tree_dock, self.panel_dock], widths, QtCore.Qt.Horizontal)
+
+    def restore_layout(self):
+        for dock in (self.tree_dock, self.panel_dock, self.history_dock):
+            dock.show()
+        self.main.resizeDocks([self.tree_dock, self.panel_dock], [240, 320], QtCore.Qt.Horizontal)
+        params = App.ParamGet('User parameter:BaseApp/Preferences/CADWorkspace')
+        params.SetInt('BrowserWidth', 240)
+        params.SetInt('DesignWidth', 320)
+
+    def close_plane_picker(self):
+        if self.plane_picker:
+            self.plane_picker.close()
+            self.plane_picker = None
 
     def dock(self, name, title, area):
         dock = QtWidgets.QDockWidget(title, self.main)
@@ -267,11 +416,12 @@ class Workspace(QtCore.QObject):
         self.history.setFlow(QtWidgets.QListView.LeftToRight)
         self.history.setWrapping(False)
         self.history.setMaximumHeight(70)
-        self.history.itemDoubleClicked.connect(lambda item: self.safe(self.edit_item, item))
-        self.history.itemClicked.connect(self.history_selection)
+        self.history.itemActivated.connect(lambda item: self.safe(self.edit_item, item))
+        self.history.itemClicked.connect(self.history_click)
         self.history_dock.setWidget(self.history)
 
     def clear_panel(self, title):
+        self.release_native_tasks()
         self.heading.setText(title)
         while self.form.count():
             item = self.form.takeAt(0)
@@ -308,11 +458,13 @@ class Workspace(QtCore.QObject):
         return length(App, self.fields[name].text(), positive)
 
     def home(self):
+        self.close_plane_picker()
         self.current_command = None
         self.native_task_active = False
         self.clear_panel('デザイン')
-        label = QtWidgets.QLabel('面または平面にスケッチを作成し、Eで押し出します。\nこの試用版の押し出し対象は閉じたスケッチ全体です。')
+        label = QtWidgets.QLabel('面または基準面にスケッチを作成し、Eで領域を選んで押し出します。\n作図の種類は上部の「作図」、パネルの復元は「表示」です。')
         label.setWordWrap(True)
+        label.setMinimumHeight(64)
         self.form.addRow(label)
         self.button('スケッチを作成', self.sketch_panel, 'create_sketch')
         self.button('ブラウザを表示', self.tree_dock.show, 'show_browser')
@@ -337,14 +489,22 @@ class Workspace(QtCore.QObject):
             body = body_of(picked[0])
             if body:
                 Gui.activeDocument().activeView().setActiveObject('pdbody', body)
-        self.clear_panel('スケッチを作成')
+        self.close_plane_picker()
+        if App.ActiveDocument is None:
+            App.newDocument()
+        from cad_selection import PlanePicker
+        self.plane_picker = PlanePicker(lambda plane: self.safe(self.start_sketch, plane))
+        self.current_command = 'plane_select'
+        self.clear_panel('平面をクリックして選択')
         self.combo('plane', '基準平面', [('XY（上面）', 'XY'), ('YZ（右側面）', 'YZ'), ('XZ（正面）', 'XZ')])
         self.button('この平面で開始', lambda: self.start_sketch(self.fields['plane'].currentData()), 'start_sketch')
+        self.button('キャンセル', self.cancel, 'cancel_plane')
         self.button('選択した面で開始', lambda: self.start_sketch(face=self.face_selection(), require_face=True), 'start_face')
 
     def start_sketch(self, plane='XY', face=None, require_face=False):
         if require_face and not face:
             raise CadError('3Dビューで平面の面を一つ選択してください。')
+        self.close_plane_picker()
         sketch = create_sketch(App, Gui, plane, face)
         self.sketch_home(sketch)
         self.dirty = True
@@ -353,6 +513,7 @@ class Workspace(QtCore.QObject):
         self.current_command = None
         self.clear_panel('スケッチ')
         self.button('幅・高さを指定して長方形', lambda: self.geometry_panel('rectangle_exact'), 'rectangle_exact')
+        self.button('中心・幅・高さを指定して長方形', lambda: self.geometry_panel('rectangle_center_exact'), 'rectangle_center_exact')
         self.button('直径を指定して円', lambda: self.geometry_panel('circle_exact'), 'circle_exact')
         self.button('寸法を追加 D', lambda: self.route('dimension'), 'dimension')
         self.button('押し出しへ E', self.extrude_panel, 'extrude')
@@ -369,23 +530,43 @@ class Workspace(QtCore.QObject):
         self.last_sketch = sketch
         self.home()
 
+    def point_geometry_panel(self, mode):
+        sketch = sketch_in_edit(Gui)
+        if not sketch:
+            raise CadError('スケッチ編集中に作図してください。')
+        self.clear_panel('3点矩形' if mode == 'rectangle_three_points' else '2点円')
+        count = 3 if mode == 'rectangle_three_points' else 2
+        defaults = [(0, 0), (40, 20), (30, 40)]
+        for i in range(count):
+            for axis, value in zip(('x', 'y'), defaults[i]):
+                self.field(axis + str(i), '点%d %s' % (i + 1, axis.upper()), str(value) + ' mm')
+        def create():
+            from cad_core import add_three_point_rectangle, add_two_point_circle
+            values = [self.value(axis + str(i), False) for i in range(count) for axis in ('x', 'y')]
+            function = add_three_point_rectangle if count == 3 else add_two_point_circle
+            function(App, sketch, *values)
+            self.fit_view()
+            self.sketch_home(sketch)
+        self.button('作成', create, 'add_point_geometry')
+        self.button('戻る', self.sketch_home, 'back')
+
     def geometry_panel(self, mode):
         sketch = sketch_in_edit(Gui)
         if not sketch:
             raise CadError('スケッチ編集中に実行してください。')
         self.current_command = mode
-        self.clear_panel('寸法付き長方形' if mode == 'rectangle_exact' else '直径指定の円')
+        self.clear_panel('寸法付き長方形' if mode in ('rectangle_exact', 'rectangle_center_exact') else '直径指定の円')
         self.field('x', 'X位置', '0 mm')
         self.field('y', 'Y位置', '0 mm')
-        if mode == 'rectangle_exact':
+        if mode in ('rectangle_exact', 'rectangle_center_exact'):
             self.field('width', '幅', '50 mm')
             self.field('height', '高さ', '30 mm')
         else:
             self.field('diameter', '直径', '10 mm')
         def create():
             x, y = self.value('x', False), self.value('y', False)
-            if mode == 'rectangle_exact':
-                add_rectangle(App, sketch, self.value('width'), self.value('height'), x, y)
+            if mode in ('rectangle_exact', 'rectangle_center_exact'):
+                add_rectangle(App, sketch, self.value('width'), self.value('height'), x, y, center=mode == 'rectangle_center_exact')
             else:
                 add_circle(App, sketch, self.value('diameter'), x, y)
             self.fit_view()
@@ -403,11 +584,18 @@ class Workspace(QtCore.QObject):
         self.session = ExtrusionSession(App, Gui, sketch)
         self.current_command = 'extrude'
         self.clear_panel('押し出し')
-        label = QtWidgets.QLabel(sketch.Label + '（閉じたスケッチ全体）')
+        label = QtWidgets.QLabel(sketch.Label + '：塗られた領域をクリックして選択')
         label.setWordWrap(True)
         self.form.addRow('プロファイル', label)
+        self.region_list = QtWidgets.QListWidget()
+        self.region_list.setObjectName('CAD_Regions')
+        self.region_list.setMaximumHeight(140)
+        self.form.addRow('領域', self.region_list)
+        self.boundary_toggle = QtWidgets.QCheckBox('ボディ断面を境界に含める')
+        self.boundary_toggle.setChecked(self.session.previous is not None)
+        self.form.addRow(self.boundary_toggle)
         self.field('distance', '距離', '10 mm')
-        options = [('結合', 'join'), ('切り取り', 'cut')]
+        options = [('結合', 'join'), ('切り取り', 'cut'), ('新規ボディ', 'new')]
         if self.session.previous is None:
             options = [('新規ボディ内の最初の形状', 'new')]
         self.combo('operation', '操作', options)
@@ -420,7 +608,94 @@ class Workspace(QtCore.QObject):
         for widget in self.fields.values():
             signal = widget.textChanged if isinstance(widget, QtWidgets.QLineEdit) else widget.currentIndexChanged
             signal.connect(self.schedule_preview)
+        self.region_list.itemChanged.connect(self.regions_changed)
+        self.boundary_toggle.toggled.connect(lambda *_: self.safe(self.load_regions))
+        self.load_regions()
+
+    def load_regions(self):
+        from cad_profiles import regions
+        from cad_selection import RegionPicker
+        if self.region_picker:
+            self.region_picker.close()
+            self.region_picker = None
+        old_keys = list(self.session.region_keys or [])
+        self.preview_timer.stop()
+        self.preview_ok = False
+        self.accept_button.setEnabled(False)
+        self.session.region_keys = []
+        self.session.region_candidates = []
+        if self.session.preview:
+            self.session.preview.ViewObject.Visibility = False
+        self.session.boundaries = [self.session.previous] if self.boundary_toggle.isChecked() and self.session.previous else []
+        candidates = regions(self.session.sketch, self.session.boundaries)
+        self.session.region_candidates = candidates
+        self.session.region_keys = []
+        self.region_list.blockSignals(True)
+        self.region_list.clear()
+        for i, (key, face) in enumerate(candidates):
+            item = QtWidgets.QListWidgetItem("領域 %d：%.3f mm²" % (i + 1, face.Area))
+            item.setData(QtCore.Qt.UserRole, key)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(QtCore.Qt.Unchecked)
+            self.region_list.addItem(item)
+        self.region_list.blockSignals(False)
+        self.region_picker = RegionPicker(self.session.sketch, candidates, self.toggle_region)
+        # Preserve the usual single closed-sketch workflow; other cells stay explicit.
+        selected = []
+        try:
+            import Part
+            wires = self.session.sketch.Shape.Wires
+            if wires and all(w.isClosed() for w in wires):
+                original = Part.makeFace(wires, "Part::FaceMakerBullseye")
+                original.transformShape(self.session.sketch.Placement.inverse().toMatrix(), True)
+                selected = [key for key, face in candidates if abs(face.common(original).Area - face.Area) < 1e-5]
+        except Exception:
+            pass
+        if getattr(self.session, 'editing_profile', False):
+            selected = [key for key, _ in candidates if key in old_keys]
+        if not selected and len(candidates) == 1 and not getattr(self.session, 'editing_profile', False):
+            selected = [candidates[0][0]]
+        self.region_list.blockSignals(True)
+        for i in range(self.region_list.count()):
+            item = self.region_list.item(i)
+            item.setCheckState(QtCore.Qt.Checked if item.data(QtCore.Qt.UserRole) in selected else QtCore.Qt.Unchecked)
+        self.region_list.blockSignals(False)
+        self.regions_changed()
+
+    def toggle_region(self, key):
+        for i in range(self.region_list.count()):
+            item = self.region_list.item(i)
+            if item.data(QtCore.Qt.UserRole) == key:
+                item.setCheckState(QtCore.Qt.Unchecked if item.checkState() == QtCore.Qt.Checked else QtCore.Qt.Checked)
+                return
+
+    def regions_changed(self, *_):
+        if not self.session:
+            return
+        self.session.region_keys = [self.region_list.item(i).data(QtCore.Qt.UserRole) for i in range(self.region_list.count()) if self.region_list.item(i).checkState() == QtCore.Qt.Checked]
+        self.session.use_source_sketch = False
+        try:
+            import Part
+            wires = self.session.sketch.Shape.Wires
+            if wires and all(w.isClosed() for w in wires) and self.session.region_keys:
+                original = Part.makeFace(wires, 'Part::FaceMakerBullseye')
+                original.transformShape(self.session.sketch.Placement.inverse().toMatrix(), True)
+                faces = [dict(self.session.region_candidates)[key] for key in self.session.region_keys]
+                selected = faces[0].multiFuse(faces[1:]) if len(faces) > 1 else faces[0]
+                self.session.use_source_sketch = abs(original.Area - selected.Area) < 1e-6 and abs(original.common(selected).Area - original.Area) < 1e-6
+        except Exception:
+            pass
+        if self.region_picker:
+            self.region_picker.highlight(self.session.region_keys)
+        if getattr(self.session, 'editing_profile', False):
+            self.accept_button.setEnabled(bool(self.session.region_keys))
+            return
         self.schedule_preview()
+
+    def close_region_picker(self):
+        if self.region_picker:
+            self.region_picker.close()
+            self.region_picker = None
 
     def extrusion_values(self):
         direction = self.fields['direction'].currentData()
@@ -460,10 +735,12 @@ class Workspace(QtCore.QObject):
             feature = self.session.accept(*self.extrusion_values())
         except Exception:
             if self.session.closed:
+                self.close_region_picker()
                 self.session = None
                 self.home()
             raise
         self.session = None
+        self.close_region_picker()
         Gui.Selection.clearSelection()
         if first_solid:
             QtCore.QTimer.singleShot(300, lambda: self.fit_view() if Gui.activeDocument() else None)
@@ -471,6 +748,8 @@ class Workspace(QtCore.QObject):
         self.status('押し出しを作成しました。履歴のダブルクリックで距離を変更できます。')
 
     def cancel(self):
+        self.close_region_picker()
+        self.close_plane_picker()
         self.preview_timer.stop()
         if self.session:
             self.session.cancel()
@@ -492,7 +771,9 @@ class Workspace(QtCore.QObject):
         obj = doc.getObject(name) if doc and name else None
         if not obj:
             return
-        if obj.TypeId == 'Sketcher::SketchObject':
+        if obj.TypeId == 'PartDesign::FeaturePython' and 'RegionKeys' in obj.PropertiesList:
+            self.edit_region_panel(obj)
+        elif obj.TypeId == 'Sketcher::SketchObject':
             if Gui.activeDocument().getInEdit():
                 Gui.activeDocument().resetEdit()
             Gui.activeDocument().setEdit(obj.Name)
@@ -501,6 +782,36 @@ class Workspace(QtCore.QObject):
             if Gui.activeDocument().getInEdit():
                 raise CadError('スケッチ編集を終了してください。')
             self.edit_feature_panel(obj)
+        elif obj.TypeId != 'PartDesign::Body':
+            self.show_native_tasks()
+            Gui.activeDocument().setEdit(obj.Name)
+
+    def edit_region_panel(self, profile):
+        from cad_profiles import ProfileEditSession
+        if self.session or Gui.activeDocument().getInEdit():
+            raise CadError('現在の編集を終了してください。')
+        self.session = ProfileEditSession(profile)
+        self.current_command = 'region_edit'
+        self.clear_panel('押し出し領域を再選択')
+        self.region_list = QtWidgets.QListWidget()
+        self.region_list.setObjectName('CAD_Regions')
+        self.form.addRow(self.region_list)
+        self.boundary_toggle = QtWidgets.QCheckBox('ボディ断面を境界に含める')
+        self.boundary_toggle.setChecked(bool(self.session.boundaries))
+        self.form.addRow(self.boundary_toggle)
+        self.accept_button = self.button('適用', self.accept_region_edit, 'apply_regions')
+        self.button('キャンセル', self.cancel, 'cancel')
+        self.region_list.itemChanged.connect(self.regions_changed)
+        self.boundary_toggle.toggled.connect(lambda *_: self.safe(self.load_regions))
+        self.load_regions()
+        self.dirty = True
+
+    def accept_region_edit(self):
+        self.session.accept()
+        self.session = None
+        self.close_region_picker()
+        self.home()
+        self.status('押し出す領域を変更し、後続フィーチャを再計算しました。')
 
     def edit_feature_panel(self, obj):
         self.clear_panel(obj.Label + 'を編集')
@@ -522,6 +833,11 @@ class Workspace(QtCore.QObject):
             self.home()
             self.status('距離を変更し、後続フィーチャを再計算しました。')
         self.button('適用', apply, 'apply_length')
+        profile = getattr(obj, 'Profile', None)
+        if isinstance(profile, (tuple, list)):
+            profile = profile[0] if profile else None
+        if profile and 'RegionKeys' in profile.PropertiesList:
+            self.button('押し出す領域を再選択', lambda target=profile: self.edit_region_panel(target), 'edit_regions')
         self.button('キャンセル', self.home, 'cancel')
 
     def tree_selection(self):
@@ -547,6 +863,19 @@ class Workspace(QtCore.QObject):
         obj = doc.getObject(name) if doc and name else None
         if obj:
             obj.ViewObject.Visibility = item.checkState(0) == QtCore.Qt.Checked
+
+    def history_click(self, item):
+        # Qt/WASM may deliver two press/release pairs without a DblClick event.
+        # Use the original input timestamp so a slow repaint cannot split them.
+        name = (App.ActiveDocument.Name if App.ActiveDocument else None, item.data(QtCore.Qt.UserRole))
+        stamp = self.history_event_time or time.monotonic() * 1000
+        previous = self.last_history_click
+        self.last_history_click = (name, stamp)
+        if previous and previous[0] == name and 0 <= stamp - previous[1] <= max(700, QtWidgets.QApplication.doubleClickInterval()):
+            self.last_history_click = None
+            self.safe(self.edit_item, item)
+        else:
+            self.history_selection(item)
 
     def history_selection(self, item):
         if self.session:
@@ -595,11 +924,44 @@ class Workspace(QtCore.QObject):
         filter_actions('')
         query.setFocus()
 
+    def release_native_tasks(self):
+        if self.native_task_widget is not None:
+            self.native_task_dock.setWidget(self.native_task_widget)
+            self.native_task_widget = self.native_task_dock = None
+        self.native_task_active = False
+        self.native_task_pending = False
+        if hasattr(self, 'native_host'):
+            self.native_host.hide()
+        if hasattr(self, 'body'):
+            self.body.show()
+
     def show_native_tasks(self):
+        self.clear_panel('操作')
+        self.current_command = 'native_task'
         self.native_task_active = True
-        for widget in self.native_widgets:
-            if isinstance(widget, QtWidgets.QDockWidget) and widget.objectName() in ('Tasks', 'Combo View'):
-                widget.show()
+        self.native_task_pending = True
+        self.body.hide()
+        if not hasattr(self, 'native_host'):
+            self.native_host = QtWidgets.QWidget()
+            QtWidgets.QVBoxLayout(self.native_host).setContentsMargins(0, 0, 0, 0)
+            self.panel_dock.widget().layout().insertWidget(1, self.native_host, 1)
+        QtCore.QTimer.singleShot(100, self.embed_native_tasks)
+
+    def embed_native_tasks(self):
+        if not self.native_task_active:
+            return
+        self.native_task_pending = False
+        for dock in self.main.findChildren(QtWidgets.QDockWidget):
+            if dock.objectName() == 'Tasks' and dock.widget():
+                self.native_task_dock = dock
+                self.native_task_widget = dock.widget()
+                self.native_task_widget.setParent(self.native_host)
+                self.native_host.layout().addWidget(self.native_task_widget)
+                self.native_task_widget.show()
+                self.native_host.show()
+                dock.hide()
+                return
+        raise CadError('操作パネルの組み込みに失敗しました。')
 
     def update_theme(self):
         palette = self.main.palette()
@@ -694,6 +1056,14 @@ class Workspace(QtCore.QObject):
         try:
             doc = App.ActiveDocument
             edit = sketch_in_edit(Gui)
+            if self.plane_picker and (not Gui.activeDocument() or self.plane_picker.view != Gui.activeDocument().activeView()):
+                self.close_plane_picker()
+                self.current_command = None
+            editing_native = bool(Gui.activeDocument() and Gui.activeDocument().getInEdit())
+            task_buttons = self.native_task_widget and any(box.isVisible() for box in self.native_task_widget.findChildren(QtWidgets.QDialogButtonBox))
+            if self.native_task_active and not self.native_task_pending and not Gui.Control.activeDialog() and not editing_native and not task_buttons:
+                self.current_command = None
+                self.sketch_home(edit) if edit else self.home()
             self.update_theme()
             self.update_references()
             signature = (doc.Name if doc else None, edit.Name if edit else None,
@@ -708,10 +1078,9 @@ class Workspace(QtCore.QObject):
                 for bar in self.main.findChildren(QtWidgets.QToolBar):
                     if not bar.objectName().startswith('CAD_'):
                         bar.hide()
-                if not self.native_task_active:
-                    for dock in self.main.findChildren(QtWidgets.QDockWidget):
-                        if not dock.objectName().startswith('CAD_'):
-                            dock.hide()
+                for dock in self.main.findChildren(QtWidgets.QDockWidget):
+                    if not dock.objectName().startswith('CAD_'):
+                        dock.hide()
                 for widget in self.main.findChildren(QtWidgets.QWidget):
                     if 'OverlayTabWidget' in widget.metaObject().className():
                         widget.hide()
@@ -729,12 +1098,16 @@ class Workspace(QtCore.QObject):
         self.dirty = False
         doc = App.ActiveDocument
         edit = sketch_in_edit(Gui)
-        locked = self.session is not None
+        locked = self.session is not None or self.native_task_active
         for name, action in self.actions.items():
             action.setEnabled(not locked or name == 'cancel')
         # Native Sketcher must receive Esc while drawing; only the extrusion
         # session owns it globally. Avoid consuming native tool cancellation.
         for name in ('line', 'rectangle', 'circle', 'dimension', 'trim', 'construction', 'finish'):
+            self.actions[name].setEnabled(bool(edit) and not locked)
+        for name, (_, sketch_only) in self.native_actions.items():
+            self.actions[name].setEnabled(not locked and bool(edit if sketch_only else doc))
+        for name in ('rectangle_center_exact', 'rectangle_three_points', 'circle_two_points', 'sketch_settings'):
             self.actions[name].setEnabled(bool(edit) and not locked)
         for name in ('extrude', 'fillet', 'chamfer', 'fit', 'save', 'export', 'grid'):
             self.actions[name].setEnabled(bool(doc) and not locked)
@@ -748,6 +1121,7 @@ class Workspace(QtCore.QObject):
 
     def render_document(self, doc):
         objects = [o for o in doc.Objects if not o.Name.startswith('CADPreview')] if doc else []
+        self.render_history(doc, objects)
         structure = (doc.Name if doc else None, tuple((o.Name, o.TypeId, o.Label) for o in objects))
         selected = {o.Name for o in Gui.Selection.getSelection()} if doc else set()
         if structure == self.tree_signature:
@@ -768,7 +1142,6 @@ class Workspace(QtCore.QObject):
                 expanded.add(item.data(0, QtCore.Qt.UserRole))
             iterator += 1
         self.tree.clear()
-        self.history.clear()
         self.tree_items = {}
         if not doc:
             return
@@ -789,11 +1162,20 @@ class Workspace(QtCore.QObject):
             item.setExpanded(obj.Name in expanded or (not expanded and obj.TypeId == 'PartDesign::Body'))
             items[obj.Name] = item
             self.tree_items[obj.Name] = item
-            if obj.TypeId == 'Sketcher::SketchObject' or obj.TypeId.startswith('PartDesign::') and obj.TypeId != 'PartDesign::Body':
-                history = QtWidgets.QListWidgetItem(obj.Label)
-                history.setData(QtCore.Qt.UserRole, obj.Name)
-                history.setToolTip(obj.TypeId + '\nダブルクリックで編集')
-                self.history.addItem(history)
+    def render_history(self, doc, objects):
+        features = [obj for obj in objects if obj.TypeId == 'Sketcher::SketchObject' or
+                    obj.TypeId.startswith('PartDesign::') and obj.TypeId not in
+                    ('PartDesign::Body', 'PartDesign::FeaturePython')]
+        signature = (doc.Name if doc else None, tuple((obj.Name, obj.Label) for obj in features))
+        if signature == self.history_signature:
+            return
+        self.history_signature = signature
+        self.history.clear()
+        for obj in features:
+            item = QtWidgets.QListWidgetItem(obj.Label)
+            item.setData(QtCore.Qt.UserRole, obj.Name)
+            item.setToolTip(obj.TypeId + '\nダブルクリックで編集')
+            self.history.addItem(item)
 
     def diagnostics(self):
         doc = App.ActiveDocument
@@ -827,6 +1209,7 @@ class Workspace(QtCore.QObject):
     def stop(self):
         self.cancel()
         self.timer.stop()
+        self.release_native_tasks()
         self.detach_references()
         Gui.Selection.removeObserver(self.observer)
         App.removeDocumentObserver(self.observer)
@@ -857,16 +1240,40 @@ class Workspace(QtCore.QObject):
         WORKSPACE = None
 
     def eventFilter(self, watched, event):
+        if event.type() == QtCore.QEvent.MouseButtonRelease and hasattr(self, 'history') and watched == self.history.viewport():
+            self.history_event_time = event.timestamp() or None
+        if event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease) and event.button() == QtCore.Qt.LeftButton:
+            picker = self.plane_picker or self.region_picker
+            if picker and isinstance(watched, QtWidgets.QWidget):
+                mdi = self.main.findChild(QtWidgets.QMdiArea)
+                active = mdi.activeSubWindow() if mdi else None
+                viewer = next((w for w in active.findChildren(QtWidgets.QWidget) if w.metaObject().className() == 'Gui::View3DInventorViewer'), None) if active else None
+                if viewer and (watched == viewer or viewer.isAncestorOf(watched)):
+                    point = viewer.mapFromGlobal(event.globalPosition().toPoint())
+                    if viewer.rect().contains(point):
+                        if event.type() == QtCore.QEvent.MouseButtonPress:
+                            key = self.safe(picker.pick_at, point.x(), point.y())
+                            if key is not None:
+                                QtCore.QTimer.singleShot(0, lambda k=key, p=picker: self.safe(p.choose, k))
+                                return True
+                        elif self.region_picker:
+                            return True
+        if event.type() == QtCore.QEvent.MouseButtonDblClick and hasattr(self, 'history') and watched == self.history.viewport():
+            item = self.history.itemAt(event.position().toPoint())
+            if item:
+                self.last_history_click = None
+                QtCore.QTimer.singleShot(0, lambda target=item: self.safe(self.edit_item, target))
+                return True
         if event.type() not in (QtCore.QEvent.ShortcutOverride, QtCore.QEvent.KeyPress):
             return False
         focus = QtWidgets.QApplication.focusWidget()
-        text_input = isinstance(focus, QtWidgets.QLineEdit)
+        text_input = isinstance(focus, (QtWidgets.QLineEdit, QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit, QtWidgets.QAbstractSpinBox))
         blocked_modifiers = QtCore.Qt.ControlModifier | QtCore.Qt.AltModifier | QtCore.Qt.MetaModifier
         name = None
         if not text_input and not event.modifiers() & blocked_modifiers:
             name = self.key_actions.get(event.text().upper())
             if event.key() == QtCore.Qt.Key_Escape:
-                name = 'cancel' if self.session else None
+                name = 'cancel' if self.session or self.plane_picker else None
         if event.type() == QtCore.QEvent.ShortcutOverride:
             if event.key() == QtCore.Qt.Key_Escape and self.session:
                 name = 'cancel'
