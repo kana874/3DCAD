@@ -214,18 +214,6 @@ document.addEventListener('DOMContentLoaded', function () {
  .topbar .home svg{width:20px; height:20px; fill:currentColor}
  .topbar .socials{display:flex; align-items:center; gap:16px}
  .topbar .socials svg{width:18px; height:18px; fill:currentColor; display:block}
- .topbar .socials a.support{font:700 11px/1 "Trebuchet MS","Gill Sans",-apple-system,sans-serif; letter-spacing:.08em; text-transform:uppercase; color:var(--gold,#d3a84e); border:1px solid rgba(211,168,78,.55); border-radius:999px; padding:6px 12px}
- .topbar .socials a.support:hover{color:var(--gold-hi,#eecb78); border-color:var(--gold-hi,#eecb78)}
- @media (max-width:520px){ .topbar .socials a.support{display:none} }
- .vt-nudge{position:fixed; left:16px; bottom:16px; z-index:45; max-width:340px; padding:16px 18px; border-radius:12px; background:#111318; color:#e7ecf3; border:1px solid #2a2f3a; box-shadow:0 10px 30px rgba(0,0,0,.45); font:14px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif}
- .vt-nudge[hidden]{display:none}
- .vt-nudge p{margin:0 0 12px}
- .vt-nudge .row{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
- .vt-nudge a,.vt-nudge button{font:600 12.5px/1 -apple-system,"Segoe UI",Roboto,sans-serif; border-radius:8px; padding:9px 12px; cursor:pointer; text-decoration:none; border:1px solid #2a2f3a; background:transparent; color:#9aa4b4}
- .vt-nudge a.give{background:#d3a84e; border-color:#d3a84e; color:#1a140a}
- .vt-nudge a.alt{color:#e7ecf3}
- .vt-nudge a:hover,.vt-nudge button:hover{border-color:#eecb78}
- .vt-nudge :focus-visible{outline:2px solid #d3a84e; outline-offset:2px}
  @media (max-width:520px){ .topbar{padding:11px 15px} .topbar .home .label{display:none} .topbar .socials{gap:13px} }
 </style><!-- freecad-web-ja: source customization -->
 <script src="/ja/freecad-ja.js" defer></script>
@@ -240,14 +228,14 @@ document.addEventListener('DOMContentLoaded', function () {
     <span class="label">Virtastic</span>
   </a>
   <nav class="socials" aria-label="Virtastic on social media">
-    <a class="support" href="https://virtastic.app/go/patreon?utm_source=freecad&utm_medium=app&utm_campaign=support&utm_content=topbar" target="_blank" rel="noopener">Support</a>
+
     <a href="https://github.com/Virtastic" target="_blank" rel="noopener" aria-label="GitHub" title="GitHub"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg></a>
     <a href="https://discord.gg/PzFfDkbSue" target="_blank" rel="noopener" aria-label="Discord" title="Discord"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z"/></svg></a>
     <a href="https://www.linkedin.com/company/virtastic" target="_blank" rel="noopener" aria-label="LinkedIn" title="LinkedIn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg></a>
-    <a href="https://www.patreon.com/virtastic" target="_blank" rel="noopener" aria-label="Patreon" title="Patreon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M0 .48v23.04h4.22V.48zm15.385 0c-4.764 0-8.641 3.88-8.641 8.65 0 4.755 3.877 8.623 8.641 8.623 4.75 0 8.615-3.868 8.615-8.623C24 4.36 20.136.48 15.385.48z"/></svg></a>
+
     <a href="https://www.reddit.com/r/virtastic" target="_blank" rel="noopener" aria-label="Reddit" title="Reddit"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0zm5.01 4.744c.688 0 1.25.561 1.25 1.249a1.25 1.25 0 0 1-2.498.056l-2.597-.547-.8 3.747c1.824.07 3.48.632 4.674 1.488.308-.309.73-.491 1.207-.491.968 0 1.754.786 1.754 1.754 0 .716-.435 1.333-1.01 1.614a3.111 3.111 0 0 1 .042.52c0 2.694-3.13 4.87-7.004 4.87-3.874 0-7.004-2.176-7.004-4.87 0-.183.015-.366.043-.534A1.748 1.748 0 0 1 4.028 12c0-.968.786-1.754 1.754-1.754.463 0 .898.196 1.207.49 1.207-.883 2.878-1.43 4.744-1.487l.885-4.182a.342.342 0 0 1 .14-.197.35.35 0 0 1 .238-.042l2.906.617a1.214 1.214 0 0 1 1.108-.701zM9.25 12C8.561 12 8 12.562 8 13.25c0 .687.561 1.248 1.25 1.248.687 0 1.248-.561 1.248-1.249 0-.688-.561-1.249-1.249-1.249zm5.5 0c-.687 0-1.248.561-1.248 1.25 0 .687.561 1.248 1.249 1.248.688 0 1.249-.561 1.249-1.249 0-.687-.562-1.249-1.25-1.249zm-5.466 3.99a.327.327 0 0 0-.231.094.33.33 0 0 0 0 .463c.842.842 2.484.913 2.961.913.477 0 2.105-.056 2.961-.913a.361.361 0 0 0 .029-.463.33.33 0 0 0-.464 0c-.547.533-1.684.73-2.512.73-.828 0-1.979-.196-2.512-.73a.326.326 0 0 0-.232-.095z"/></svg></a>
     <a href="https://www.youtube.com/@Virtastic-Apps" target="_blank" rel="noopener" aria-label="YouTube" title="YouTube"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></a>
-    <a href="https://ko-fi.com/virtastic" target="_blank" rel="noopener" aria-label="Ko-fi" title="Ko-fi"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23.881 8.948c-.773-4.085-4.859-4.593-4.859-4.593H.723c-.604 0-.679.798-.679.798s-.082 7.324-.022 11.822c.164 2.424 2.586 2.672 2.586 2.672s8.267-.023 11.966-.049c2.438-.426 2.683-2.566 2.658-3.734 4.352.24 7.422-2.831 6.649-6.916zm-11.062 3.511c-1.246 1.453-4.011 3.976-4.011 3.976s-.121.119-.31.023c-.076-.057-.108-.09-.108-.09-.443-.441-3.368-3.049-4.034-3.954-.709-.965-1.041-2.7-.091-3.71.951-1.01 3.005-1.086 4.363.407 0 0 1.565-1.782 3.468-.963 1.904.82 1.832 3.011.723 4.311zm6.173.478c-.928.116-1.682.028-1.682.028V7.284h1.77s1.971.551 1.971 2.638c0 1.913-.985 2.667-2.059 3.015z"/></svg></a>
+
   </nav>
 </header>
 </header>
@@ -547,7 +535,6 @@ document.addEventListener('DOMContentLoaded', function () {
       } else if (!wrote && typeof window.fcwebNotify === 'function') {
         window.fcwebNotify('The solver produced no result files.', 'error');
       }
-      if (rc === 0 && wrote && window.vtNudge) { window.vtNudge('solve'); }
       return rc | 0;
     } catch (e) {
       try { console.error('[fcweb] ccx failed', e); } catch (_) {}
@@ -2925,7 +2912,7 @@ function fcRunPy(m, ptr){
                     if (typeof window.fcwebNotify === 'function') {
                       window.fcwebNotify('That operation failed and was stopped (' +
                         String(e && e.message ? e.message : e) +
-                        '). Your document is unchanged — please report this.', 'error');
+                        '). The document may have changed. Check the model before continuing; save a copy and report this error.', 'error');
                     }
                   } catch(_){} });
   } else { m._free(ptr); window.__fcPyBusy = false; }
@@ -7276,53 +7263,5 @@ window.fcRunPy = fcRunPy;
   }
 })();
 </script>
-<div id="vtNudge" class="vt-nudge" role="status" hidden>
-  <p><b>Enjoying FreeCAD in your browser?</b> It is free and stays free. A few dollars a month keeps it hosted and up to date.</p>
-  <div class="row">
-    <a class="give" data-act="give" href="https://virtastic.app/go/patreon?utm_source=freecad&utm_medium=app&utm_campaign=support&utm_content=nudge" target="_blank" rel="noopener">Support on Patreon</a>
-    <a class="alt" data-act="give" href="https://virtastic.app/go/kofi?utm_source=freecad&utm_medium=app&utm_campaign=support&utm_content=nudge" target="_blank" rel="noopener">Give once on Ko-fi</a>
-    <button type="button" data-act="later">Not now</button>
-    <button type="button" data-act="never">Do not ask again</button>
-  </div>
-</div>
-<script id="vt-nudge">
-// Support prompt. Shown rarely and never in the way: after a first successful solve, or after 20
-// minutes of use once the user has paused. At most 3 times, 14 days apart, and never again once
-// dismissed or clicked. Never in an embedded frame. Storage failures just mean it is skipped.
-(function () {
-  var card = document.getElementById('vtNudge');
-  if (!card) return;
-  var KEY = 'vt.support.nudge', GAP = 14 * 864e5, MAX = 3, IDLE = 5000, AFTER = 20 * 60;
-  var embedded = window.self !== window.top || /[?&]embed=/.test(location.search);
-  function load() { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-  function save(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
-  var lastInput = Date.now(), hideTimer, visible = 0, fired = false;
-  ['pointerdown', 'keydown', 'wheel'].forEach(function (t) {
-    addEventListener(t, function () { lastInput = Date.now(); }, { passive: true, capture: true });
-  });
-  function show() {
-    var b = document.body, s = load();
-    if (embedded || !card.hidden || !b.classList.contains('booted') || b.classList.contains('walled')) return false;
-    if (s.done || (s.shown || 0) >= MAX || Date.now() - (s.last || 0) < GAP) return false;
-    s.shown = (s.shown || 0) + 1; s.last = Date.now(); save(s);
-    card.hidden = false;
-    hideTimer = setTimeout(function () { card.hidden = true; }, 30000);
-    return true;
-  }
-  card.addEventListener('click', function (e) {
-    var t = e.target.closest('[data-act]');
-    if (!t) return;
-    var act = t.getAttribute('data-act');
-    if (act === 'never' || act === 'give') { var s = load(); s.done = true; save(s); }
-    card.hidden = true; clearTimeout(hideTimer);
-  });
-  var timer = setInterval(function () {
-    if (load().done) return clearInterval(timer);
-    if (fired || document.visibilityState !== 'visible') return;
-    visible += 30;
-    if (visible >= AFTER && Date.now() - lastInput >= IDLE && show()) fired = true;
-  }, 30000);
-  window.vtNudge = function () { return show(); };
-})();
-</script>
+
 </body></html>

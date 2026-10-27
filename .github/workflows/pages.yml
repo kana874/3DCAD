@@ -53,6 +53,8 @@ jobs:
         run: node tests/test_pages_sw.mjs
       - name: Verify workspace boot ownership
         run: node tests/test_workspace_boot.mjs
+      - name: Verify Python bridge failure reporting
+        run: node tests/test_python_bridge.mjs
       - name: Check Fusion modeling palette JavaScript syntax
         run: |
           node --check play-gui/fusion/design-palette.js

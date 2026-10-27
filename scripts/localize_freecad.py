@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 MARKER = '<!-- freecad-web-ja: source customization -->'
@@ -20,7 +21,26 @@ WORKSPACE_SCRIPT = '<script src="/cad/workspace.js" defer></script>'
 FONT_JSON = '/ja/fonts.json'
 
 
+def remove_fundraising(page: str) -> str:
+    """Remove the prompt, its scheduler/storage, links, and invocation at build time.
+
+    Run before the localization marker check so already customized snapshots
+    receive this change too. Unknown upstream fundraising markup fails closed.
+    """
+    page = re.sub(r'<div\b[^>]*\bid="vtNudge"[\s\S]*?<script\b[^>]*\bid="vt-nudge"[\s\S]*?</script>', '', page)
+    page = re.sub(r'[ \t]*<a\b[^>]*href="[^"]*(?:patreon|ko-fi|/go/kofi)[^"]*"[^>]*>[\s\S]*?</a>', '', page, flags=re.I)
+    page = re.sub(r'^.*(?:\.vt-nudge|\.socials a\.support).*\n', '', page, flags=re.M)
+    page = re.sub(r'^.*window\.vtNudge.*\n', '', page, flags=re.M)
+    if re.search(r'vtNudge|vt-nudge|vt\.support\.nudge|patreon|ko-fi|/go/kofi|Enjoying FreeCAD in your browser', page, re.I):
+        raise ValueError('Unrecognized upstream fundraising content remains')
+    return page
+
+
 def localize(page: str) -> str:
+    page = remove_fundraising(page)
+    # A rejected JSPI call is not proof that FreeCAD rolled back every mutation.
+    page = page.replace('). Your document is unchanged — please report this.',
+                        '). The document may have changed. Check the model before continuing; save a copy and report this error.')
     if MARKER in page:
         assert 'preload: ["/ja/fonts.json"]' in page, "Partial JA patch found"
         # Checked-in upstream snapshot predates the optional Fusion bridge;
