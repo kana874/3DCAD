@@ -710,6 +710,10 @@ class Workspace(QtCore.QObject):
         self.button('戻る', self.sketch_home, 'back')
 
     def extrude_panel(self):
+        face = self.face_selection() if not sketch_in_edit(Gui) else None
+        if face:
+            self.face_extrusion_panel(face)
+            return
         sketch = selected_sketch(App, Gui)
         if sketch_in_edit(Gui):
             self.finish_sketch()
@@ -745,6 +749,28 @@ class Workspace(QtCore.QObject):
         self.region_list.itemChanged.connect(self.regions_changed)
         self.boundary_toggle.toggled.connect(lambda *_: self.safe(self.load_regions))
         self.load_regions()
+
+    def face_extrusion_panel(self, face):
+        from cad_face import FaceExtrusionSession
+        if Gui.activeDocument().getInEdit():
+            raise CadError('現在の編集を終了してください。')
+        self.session = FaceExtrusionSession(App, Gui, face)
+        self.current_command = 'extrude'
+        self.clear_panel('面を押し出し')
+        self.form.addRow('面', QtWidgets.QLabel(face[0].Label + ' / ' + face[1]))
+        self.field('distance', '距離', '10 mm')
+        self.combo('operation', '操作', [('結合', 'join'), ('切り取り', 'cut'),
+                                      ('交差', 'intersect'), ('新規ボディ', 'new')])
+        self.combo('direction', '方向', [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric')])
+        self.combo('extent', '範囲', [('距離', 'distance'), ('貫通（切り取り）', 'through')])
+        self.preview_button = self.button('プレビュー', self.update_preview, 'preview')
+        self.accept_button = self.button('OK', self.accept_extrusion, 'accept')
+        self.accept_button.setEnabled(False)
+        self.button('キャンセル Esc', self.cancel, 'cancel')
+        for widget in self.fields.values():
+            signal = widget.textChanged if isinstance(widget, QtWidgets.QLineEdit) else widget.currentIndexChanged
+            signal.connect(self.schedule_preview)
+        self.schedule_preview()
 
     def load_regions(self):
         from cad_profiles import regions
@@ -913,6 +939,8 @@ class Workspace(QtCore.QObject):
                 Gui.activeDocument().resetEdit()
             Gui.activeDocument().setEdit(obj.Name)
             self.sketch_home(obj)
+        elif obj.TypeId == 'PartDesign::FeaturePython' and 'SourceFace' in obj.PropertiesList:
+            self.edit_face_feature_panel(obj)
         elif obj.TypeId in ('PartDesign::Pad', 'PartDesign::Pocket'):
             if Gui.activeDocument().getInEdit():
                 raise CadError('スケッチ編集を終了してください。')
@@ -920,6 +948,21 @@ class Workspace(QtCore.QObject):
         elif obj.TypeId != 'PartDesign::Body':
             self.show_native_tasks()
             Gui.activeDocument().setEdit(obj.Name)
+
+    def edit_face_feature_panel(self, obj):
+        self.clear_panel(obj.Label + 'を編集')
+        self.field('length', '距離', str(obj.Length))
+        def apply():
+            with transaction(obj.Document, '面押し出しの距離を編集'):
+                obj.Length = self.value('length')
+                obj.Document.recompute()
+                if obj.FaceStatus != 'OK':
+                    raise CadError(obj.FaceStatus)
+                valid_shape(obj.Shape)
+            self.home()
+            self.status('面押し出しを更新しました。')
+        self.button('適用', apply, 'apply_face_edit')
+        self.button('キャンセル', self.home, 'cancel_face_edit')
 
     def edit_region_panel(self, profile):
         from cad_profiles import ProfileEditSession
@@ -1344,7 +1387,7 @@ class Workspace(QtCore.QObject):
             items[obj.Name] = item
             self.tree_items[obj.Name] = item
     def render_history(self, doc, objects):
-        features = [obj for obj in objects if obj.TypeId == 'Sketcher::SketchObject' or
+        features = [obj for obj in objects if (obj.TypeId == 'PartDesign::FeaturePython' and 'SourceFace' in obj.PropertiesList) or obj.TypeId == 'Sketcher::SketchObject' or
                     obj.TypeId.startswith('PartDesign::') and obj.TypeId not in
                     ('PartDesign::Body', 'PartDesign::FeaturePython')]
         signature = (doc.Name if doc else None, tuple((obj.Name, obj.Label) for obj in features))

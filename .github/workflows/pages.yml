@@ -20,6 +20,7 @@ on:
       - tests/test_fusion_design.py
       - tests/test_cad_workspace.py
       - tests/cad_workspace_e2e.cjs
+      - tests/cad_face_e2e.cjs
       - tests/test_workspace_boot.mjs
       - tests/test_file_bridge.mjs
       - tests/serve_cad_fixture.py
@@ -91,6 +92,7 @@ jobs:
           test -s _site/cad/cad_workspace.py
           test -s _site/cad/cad_selection.py
           test -s _site/cad/cad_profiles.py
+          test -s _site/cad/cad_face.py
           test -s _site/cad/cad_commands.py
           test -s _site/cad/cad_catalog.py
           grep -q '/cad/workspace.js' _site/index.html
@@ -126,6 +128,10 @@ jobs:
           PY
       - name: Install browser test driver
         run: npm ci --ignore-scripts
+      - name: Verify planar face extrusion and persistence
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node tests/cad_face_e2e.cjs _site
       - name: Exercise the native workspace in the real WASM engine
         timeout-minutes: 15
         env:
