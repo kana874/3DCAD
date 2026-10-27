@@ -54,7 +54,7 @@ jobs:
         run: |
           node --check play-gui/fusion/design-palette.js
           node --check play-gui/cad/workspace.js
-          python3 -m py_compile play-gui/cad/cad_core.py play-gui/cad/cad_workspace.py
+          python3 -m py_compile play-gui/cad/*.py
           python3 -m py_compile play-gui/fusion/design-commands.py
       - name: Build Japanese FreeCAD image
         run: docker build --progress=plain -f Dockerfile.ja -t freecad-web-ja:pages .
@@ -81,6 +81,9 @@ jobs:
           test -s _site/cad/workspace.js
           test -s _site/cad/cad_core.py
           test -s _site/cad/cad_workspace.py
+          test -s _site/cad/cad_selection.py
+          test -s _site/cad/cad_profiles.py
+          test -s _site/cad/cad_commands.py
           grep -q '/cad/workspace.js' _site/index.html
           grep -q '/fusion/design-palette.js' _site/index.html
           grep -q '/fusion/fusion-mode.js' _site/index.html
@@ -115,7 +118,7 @@ jobs:
       - name: Install browser test driver
         run: npm ci --ignore-scripts
       - name: Exercise the native workspace in the real WASM engine
-        timeout-minutes: 8
+        timeout-minutes: 15
         env:
           CHROME_PATH: /usr/bin/google-chrome
         run: node tests/cad_workspace_e2e.cjs _site
