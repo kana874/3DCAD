@@ -461,6 +461,36 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
         assert.equal(info.solids,3);
         near(info.volume,72000);
         pass('STEP export -> browser download -> read back three exact solids');
+        // An older recovery copy may be the only copy a user has. Retain it,
+        // never reopen it automatically, and let the user explicitly retrieve it.
+        const savedBytes=fs.readFileSync(saved);
+        await page.evaluate(async bytes=>{
+          const vfs=window.fcInstance.FS, dir='/home/web_user/.fcweb-autosave';
+          vfs.mkdirTree(dir); vfs.writeFile(dir+'/Legacy.FCStd',new Uint8Array(bytes));
+          await new Promise((resolve,reject)=>vfs.syncfs(false,e=>e?reject(e):resolve()));
+        },Array.from(savedBytes));
+        const allowReload=dialog=>dialog.accept();
+        page.on('dialog',allowReload);
+        await page.reload({waitUntil:'domcontentloaded'});
+        page.off('dialog',allowReload);
+        await page.waitForFunction(()=>window.__cadReady || window.__cadFailed,{timeout:240000});
+        assert.equal(await page.evaluate(()=>window.__cadFailed),undefined);
+        assert.equal(await py('len(App.listDocuments())'),0,'old CAD files must not restore automatically');
+        assert.equal(await py("not hasattr(App,'_fcweb_saver')"),true);
+        await click('CAD_Button_legacy_files');
+        await page.waitForSelector('#cad-legacy-files p button');
+        await page.click('#cad-legacy-files p button');
+        const legacyPath=path.join(downloadDir,'Legacy.FCStd');
+        for (let i=0;i<300 && !fs.existsSync(legacyPath);i++) await sleep(100);
+        assert.deepEqual(fs.readFileSync(legacyPath),savedBytes,'legacy recovery copy downloads unchanged');
+        assert.equal(await page.evaluate(()=>window.fcInstance.FS.analyzePath('/home/web_user/.fcweb-autosave/Legacy.FCStd').exists),true);
+        page.once('dialog',dialog=>dialog.dismiss());
+        await page.click('#cad-legacy-files p button:nth-child(2)');
+        assert.equal(await page.evaluate(()=>window.fcInstance.FS.analyzePath('/home/web_user/.fcweb-autosave/Legacy.FCStd').exists),true,'cancel must preserve old data');
+        page.once('dialog',dialog=>dialog.accept());
+        await page.click('#cad-legacy-files p button:nth-child(2)');
+        await page.waitForFunction(()=>!window.fcInstance.FS.analyzePath('/home/web_user/.fcweb-autosave/Legacy.FCStd').exists);
+        pass('old browser recovery stays closed, downloads intact, and deletes only after confirmation');
       }
       assert.deepEqual(fundraisingRequests,[],'no fundraising requests');
       const bridgeErrors=await page.evaluate(()=>window.__fcPyErrors||[]);

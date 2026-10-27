@@ -490,7 +490,7 @@ class Workspace(QtCore.QObject):
 
     def request_file_operation(self, operation, scope='visible'):
         doc = App.ActiveDocument
-        if operation != 'open' and doc is None:
+        if operation not in ('open', 'recover') and doc is None:
             raise CadError('保存する設計がありません。')
         selected = [o.Name for o in Gui.Selection.getSelection() if o.Document == doc] if doc else []
         if operation == 'step' and scope == 'selected' and not selected:
@@ -521,6 +521,16 @@ class Workspace(QtCore.QObject):
         self.button('スケッチを作成', self.sketch_panel, 'create_sketch')
         self.button('ブラウザを表示', self.tree_dock.show, 'show_browser')
         self.button('履歴を表示', self.history_dock.show, 'show_history')
+        # Existing browser recovery copies remain available for explicit local
+        # retrieval, but are never opened or deleted automatically.
+        try:
+            import os
+            old = '/home/web_user/.fcweb-autosave'
+            if any(name.lower().endswith('.fcstd') for name in os.listdir(old)):
+                self.button('以前のブラウザ保存データを取り出す',
+                            lambda: self.request_file_operation('recover'), 'legacy_files')
+        except OSError:
+            pass
         self.editing = False
 
     def face_selection(self):

@@ -73,9 +73,44 @@
     link.href = recovery.href; link.textContent = '互換モードを開く';
     notice.append(link); document.body.append(notice);
   }
+  function showLegacyFiles() {
+    const fs=window.fcInstance.FS, dir='/home/web_user/.fcweb-autosave';
+    const prior=document.getElementById('cad-legacy-files'); if (prior) prior.remove();
+    const panel=document.createElement('div'); panel.id='cad-legacy-files';
+    panel.style.cssText='position:fixed;z-index:2147483000;left:50%;top:12%;transform:translateX(-50%);background:#fff;color:#222;padding:20px;border:1px solid #888;border-radius:8px;box-shadow:0 4px 24px #0006;max-height:70vh;overflow:auto;font:15px sans-serif';
+    const title=document.createElement('p'); title.textContent='以前のブラウザ保存データ'; panel.appendChild(title);
+    let names=[]; try { names=fs.readdir(dir).filter(name=>name.toLowerCase().endsWith('.fcstd')); } catch (_) {}
+    if (!names.length) { const text=document.createElement('p'); text.textContent='データはありません。'; panel.appendChild(text); }
+    for (const name of names) {
+      const row=document.createElement('p');
+      const download=document.createElement('button'); download.textContent=name+' を保存';
+      download.onclick=() => {
+        try {
+          const url=URL.createObjectURL(new Blob([fs.readFile(dir+'/'+name)],{type:'application/octet-stream'}));
+          const link=document.createElement('a'); link.href=url; link.download=name; document.body.appendChild(link); link.click(); link.remove();
+          setTimeout(() => URL.revokeObjectURL(url),60000);
+        } catch (error) { window.fcwebNotify?.('データを取り出せませんでした: '+error.message,'error'); }
+      };
+      const remove=document.createElement('button'); remove.textContent='削除'; remove.style.marginLeft='8px';
+      remove.onclick=() => {
+        if (!window.confirm(name+' をブラウザから削除しますか？')) return;
+        try {
+          fs.unlink(dir+'/'+name);
+          fs.syncfs(false,error=>{
+            if (error) window.fcwebNotify?.('削除結果を保存できませんでした: '+error,'error');
+            else { row.remove(); window.fcwebNotify?.('ブラウザから削除しました。','info'); }
+          });
+        } catch (error) { window.fcwebNotify?.('削除できませんでした: '+error.message,'error'); }
+      };
+      row.append(download,remove); panel.appendChild(row);
+    }
+    const close=document.createElement('button'); close.textContent='閉じる'; close.onclick=()=>panel.remove(); panel.appendChild(close);
+    document.body.appendChild(panel);
+  }
   // Qt callbacks request a browser download through a transient MEMFS file.
   async function fileRequest(request) {
     if (request.operation === 'open') { window.fcwebOpen(); return; }
+    if (request.operation === 'recover') { showLegacyFiles(); return; }
     const ext=request.operation === 'save' ? '.FCStd' : '.step';
     const filename=(request.label || 'design').replace(/[\\/:*?"<>|\x00-\x1f]/g,'_')+ext;
     let handle=null;
@@ -129,8 +164,10 @@
     } catch (_) {}
   },300);
   window.__cadSaveRequest = () => {
-    if (window.__fcPyBusy || !window.__cadReady) return;
-    window.__fcRunPyGuarded("import cad_workspace; cad_workspace.WORKSPACE.request_file_operation('save')");
+    if (window.__fcPyBusy || !window.__cadReady) {
+      window.fcwebNotify?.('処理が終わってから保存してください。','warn'); return;
+    }
+    window.__fcRunPyGuarded("import cad_workspace; cad_workspace.WORKSPACE.safe(cad_workspace.WORKSPACE.request_file_operation,'save')");
   };
   window.addEventListener('beforeunload', event => {
     try {
