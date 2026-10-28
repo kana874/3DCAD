@@ -62,6 +62,9 @@ class Workspace(QtCore.QObject):
         restore_proxies()
         self.main = Gui.getMainWindow()
         super().__init__(self.main)
+        from cad_seam import SeamVisibility
+        self.seam_visibility = SeamVisibility()
+        self.hide_seams = App.ParamGet('User parameter:BaseApp/Preferences/CADWorkspace').GetBool('HideSeams', True)
         self.dirty = True
         self.file_tokens = {}
         self.file_token_epoch = str(time.time_ns())
@@ -412,6 +415,11 @@ class Workspace(QtCore.QObject):
         menu.addAction(self.action('layout_reset', 'レイアウトを初期化'))
         menu.addAction(self.action('preferences', '設定'))
         menu.addAction(self.action('measure', '選択形状を測定'))
+        seam_action = QtGui.QAction('曲面の継ぎ目を非表示', menu)
+        seam_action.setCheckable(True)
+        seam_action.setChecked(self.hide_seams)
+        seam_action.toggled.connect(self.set_hide_seams)
+        menu.addAction(seam_action)
         for name, title in [('show_browser', 'ブラウザを表示'), ('show_design', 'デザインを表示'), ('show_history', '履歴を表示')]:
             self.action(name, title)
         button = QtWidgets.QToolButton(self.bar)
@@ -429,6 +437,16 @@ class Workspace(QtCore.QObject):
         widths = [max(185, min(500, params.GetInt('BrowserWidth', 240))),
                   max(245, min(600, params.GetInt('DesignWidth', 320)))]
         self.main.resizeDocks([self.tree_dock, self.panel_dock], widths, QtCore.Qt.Horizontal)
+
+    def set_hide_seams(self, hide):
+        self.hide_seams = hide
+        App.ParamGet('User parameter:BaseApp/Preferences/CADWorkspace').SetBool('HideSeams', hide)
+        if not hide:
+            for doc in App.listDocuments().values():
+                for obj in doc.Objects:
+                    if (doc.Name, obj.Name) in self.seam_visibility.applied:
+                        self.seam_visibility.restore(obj)
+        self.dirty = True
 
     def restore_layout(self):
         for dock in (self.tree_dock, self.panel_dock, self.history_dock):
@@ -1414,6 +1432,8 @@ class Workspace(QtCore.QObject):
     def sync(self):
         self.dirty = False
         doc = App.ActiveDocument
+        if self.hide_seams:
+            self.seam_visibility.sync(doc)
         # Browser close/reload must not silently discard an open design now
         # that CAD autosave is disabled. The marker is session-only MEMFS.
         try:
@@ -1542,6 +1562,10 @@ class Workspace(QtCore.QObject):
 
     def stop(self):
         self.cancel()
+        for doc in App.listDocuments().values():
+            for obj in doc.Objects:
+                if (doc.Name, obj.Name) in self.seam_visibility.applied:
+                    self.seam_visibility.restore(obj)
         self.timer.stop()
         self.release_native_tasks()
         self.detach_references()
