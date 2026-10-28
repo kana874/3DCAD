@@ -18,12 +18,14 @@ def selected_face(source, face_name, planar=True):
     return face
 
 
-def result_for_face(source, face_name, distance, operation, reversed=False, symmetric=False, through=False):
+def result_for_face(source, face_name, distance, operation, reversed=False, symmetric=False, through=False, distance2=None):
     if not math.isfinite(distance) or distance <= 0 or distance > 100000:
         raise CadError('正の押し出し距離を指定してください。')
+    if distance2 is not None and (not math.isfinite(distance2) or distance2 <= 0 or distance2 > 100000):
+        raise CadError('反対側にも正の押し出し距離を指定してください。')
     face = selected_face(source, face_name, planar=operation != 'offset')
     if operation == 'offset':
-        if symmetric or through:
+        if symmetric or through or distance2 is not None:
             raise CadError('面オフセットは片側の距離で指定してください。')
         solids = source.Shape.Solids
         if len(solids) != 1 or not hasattr(solids[0], 'offsetFaces'):
@@ -33,13 +35,16 @@ def result_for_face(source, face_name, distance, operation, reversed=False, symm
         return result
     face = face.copy()
     if through:
-        if operation != 'cut' or symmetric:
+        if operation != 'cut' or symmetric or distance2 is not None:
             raise CadError('貫通は片側の切り取りで指定してください。')
         bounds = source.Shape.BoundBox
         distance = bounds.DiagonalLength + (face.CenterOfMass - bounds.Center).Length + 1
     normal = face.normalAt(0, 0)
     vector = normal * (-distance if reversed else distance)
-    if symmetric:
+    if distance2 is not None:
+        face.translate(normal * -distance2)
+        vector = normal * (distance + distance2)
+    elif symmetric:
         face.translate(vector * -0.5)
     tool = face.extrude(vector)
     if operation == 'join':
@@ -64,11 +69,13 @@ class FaceExtrusion:
         obj.addProperty('App::PropertyLink', 'SourceFeature', '押し出し')
         obj.addProperty('App::PropertyString', 'SourceFace', '押し出し')
         obj.addProperty('App::PropertyLength', 'Length', '押し出し')
+        obj.addProperty('App::PropertyLength', 'Length2', '押し出し')
         obj.addProperty('App::PropertyEnumeration', 'Operation', '押し出し')
         obj.Operation = ['join', 'cut', 'intersect', 'new', 'offset']
         obj.addProperty('App::PropertyBool', 'Reversed', '押し出し')
         obj.addProperty('App::PropertyBool', 'Symmetric', '押し出し')
         obj.addProperty('App::PropertyBool', 'ThroughAll', '押し出し')
+        obj.addProperty('App::PropertyBool', 'TwoSides', '押し出し')
         obj.addProperty('App::PropertyString', 'FaceStatus', '押し出し')
         obj.setEditorMode('FaceStatus', 1)
         obj.Proxy = self
@@ -76,7 +83,8 @@ class FaceExtrusion:
     def execute(self, obj):
         try:
             obj.Shape = result_for_face(obj.SourceFeature, obj.SourceFace, float(obj.Length),
-                                        str(obj.Operation), obj.Reversed, obj.Symmetric, obj.ThroughAll)
+                                        str(obj.Operation), obj.Reversed, obj.Symmetric, obj.ThroughAll,
+                                        float(obj.Length2) if obj.TwoSides else None)
             obj.FaceStatus = 'OK'
         except Exception as error:
             obj.FaceStatus = '面の再選択または条件の修正が必要: ' + str(error)
@@ -106,10 +114,10 @@ class FaceExtrusionSession:
         self.closed = False
         self.doc.openTransaction('面を押し出し')
 
-    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False):
+    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None):
         if self.closed or self.app.ActiveDocument != self.doc:
             raise CadError('押し出し操作の文書が変更されました。')
-        result = result_for_face(self.previous, self.face_name, distance, operation, reversed, symmetric, through)
+        result = result_for_face(self.previous, self.face_name, distance, operation, reversed, symmetric, through, distance2)
         if self.preview is None:
             self.preview = self.doc.addObject('Part::Feature', 'CADPreview')
             self.preview.Label = 'プレビュー（未確定）'
@@ -122,8 +130,8 @@ class FaceExtrusionSession:
         self.doc.recompute()
         return result
 
-    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False):
-        self.update(distance, operation, reversed, symmetric, through)
+    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None):
+        self.update(distance, operation, reversed, symmetric, through, distance2)
         try:
             self.doc.removeObject(self.preview.Name)
             self.preview = None
@@ -137,8 +145,10 @@ class FaceExtrusionSession:
             obj.SourceFeature = self.previous
             obj.SourceFace = self.face_name
             obj.Length = distance
+            obj.Length2 = distance2 if distance2 is not None else 0
             obj.Operation = operation
             obj.Reversed, obj.Symmetric, obj.ThroughAll = reversed, symmetric, through
+            obj.TwoSides = distance2 is not None
             self.doc.recompute()
             if obj.FaceStatus != 'OK':
                 raise CadError(obj.FaceStatus)

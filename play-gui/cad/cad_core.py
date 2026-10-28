@@ -202,13 +202,15 @@ class ExtrusionSession:
         if self.closed or self.app.ActiveDocument != self.doc:
             raise CadError('押し出し操作の文書が変更されました。操作をやり直してください。')
 
-    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False):
+    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None):
         import Part
         self._check()
         if not math.isfinite(distance) or distance <= 0 or distance > 100000:
             raise CadError('正の押し出し距離を指定してください。')
+        if distance2 is not None and (not math.isfinite(distance2) or distance2 <= 0 or distance2 > 100000):
+            raise CadError('反対側にも正の押し出し距離を指定してください。')
         if through:
-            if operation != 'cut' or self.previous is None or symmetric:
+            if operation != 'cut' or self.previous is None or symmetric or distance2 is not None:
                 raise CadError('貫通は既存ボディの片側切り取りで指定してください。')
             bounds = self.previous.Shape.BoundBox
             distance = bounds.DiagonalLength + (self.sketch.Placement.Base - bounds.Center).Length + 1
@@ -225,7 +227,10 @@ class ExtrusionSession:
             face = Part.makeFace(wires, 'Part::FaceMakerBullseye')
         normal = self.sketch.Placement.Rotation.multVec(self.app.Vector(0, 0, 1))
         direction = normal * (-distance if reversed else distance)
-        if symmetric:
+        if distance2 is not None:
+            face.translate(normal * -distance2)
+            direction = normal * (distance + distance2)
+        elif symmetric:
             face.translate(direction * -0.5)
         tool = face.extrude(direction)
         if operation == 'join':
@@ -254,8 +259,8 @@ class ExtrusionSession:
         self.doc.recompute()
         return result
 
-    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False):
-        self.update(distance, operation, reversed, symmetric, through)
+    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None):
+        self.update(distance, operation, reversed, symmetric, through, distance2)
         try:
             self.doc.removeObject(self.preview.Name)
             self.preview = None
@@ -279,8 +284,12 @@ class ExtrusionSession:
             # the unified dialog and preview always use the sketch +normal.
             feature.Reversed = not reversed if operation == 'cut' else reversed
             if 'SideType' in feature.PropertiesList:
-                feature.SideType = 'Symmetric' if symmetric else 'One side'
+                feature.SideType = 'Two sides' if distance2 is not None else ('Symmetric' if symmetric else 'One side')
+                if distance2 is not None:
+                    feature.Length2 = distance2
             else:
+                if distance2 is not None:
+                    raise CadError('この環境では両側の押し出しを利用できません。')
                 feature.Midplane = symmetric
             self.doc.recompute()
             valid_shape(feature.Shape)

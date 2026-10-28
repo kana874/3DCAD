@@ -73,6 +73,7 @@ class Workspace(QtCore.QObject):
         self.region_picker = None
         self.plane_picker = None
         self.arrow_handle = None
+        self.arrow_handle2 = None
         self.reference_scene = None
         self.reference_root = None
         self.grid_visible = True
@@ -740,7 +741,9 @@ class Workspace(QtCore.QObject):
         if self.session.previous is None:
             options = [('新規ボディ内の最初の形状', 'new')]
         self.combo('operation', '操作', options)
-        self.combo('direction', '方向', [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric')])
+        self.combo('direction', '方向', [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric'), ('両側', 'two')])
+        self.field('distance2', '反対側の距離', '10 mm')
+        self.configure_second_distance()
         self.combo('extent', '範囲', [('距離', 'distance'), ('貫通（切り取り）', 'through')])
         self.preview_button = self.button('プレビュー', self.update_preview, 'preview')
         self.accept_button = self.button('OK', self.accept_extrusion, 'accept')
@@ -783,6 +786,11 @@ class Workspace(QtCore.QObject):
         if mode != 'offset':
             directions.append(('対称（全長）', 'symmetric'))
         self.combo('direction', '方向', directions)
+        if mode != 'offset':
+            directions.append(('両側', 'two'))
+            self.fields['direction'].addItem('両側', 'two')
+            self.field('distance2', '反対側の距離', '10 mm')
+            self.configure_second_distance()
         extents = [('距離', 'distance')] if mode == 'offset' else [('距離', 'distance'), ('貫通（切り取り）', 'through')]
         self.combo('extent', '範囲', extents)
         self.preview_button = self.button('プレビュー', self.update_preview, 'preview')
@@ -879,10 +887,17 @@ class Workspace(QtCore.QObject):
             self.region_picker.close()
             self.region_picker = None
 
+    def configure_second_distance(self):
+        direction = self.fields['direction']
+        second = self.fields['distance2']
+        second.setEnabled(direction.currentData() == 'two')
+        direction.currentIndexChanged.connect(lambda *_: second.setEnabled(direction.currentData() == 'two'))
+
     def extrusion_values(self):
         direction = self.fields['direction'].currentData()
         return (self.value('distance'), self.fields['operation'].currentData(),
-                direction == 'reverse', direction == 'symmetric', self.fields['extent'].currentData() == 'through')
+                direction == 'reverse', direction == 'symmetric', self.fields['extent'].currentData() == 'through',
+                self.value('distance2') if direction == 'two' else None)
 
     def schedule_preview(self, *_):
         self.preview_ok = False
@@ -950,10 +965,12 @@ class Workspace(QtCore.QObject):
             self.home()
 
     def close_extrusion_arrow(self):
-        if self.arrow_handle:
-            self.arrow_handle.hide()
-            self.arrow_handle.deleteLater()
-            self.arrow_handle = None
+        for attr in ('arrow_handle', 'arrow_handle2'):
+            arrow = getattr(self, attr)
+            if arrow:
+                arrow.hide()
+                arrow.deleteLater()
+                setattr(self, attr, None)
 
     def update_extrusion_arrow(self):
         from cad_arrow import ExtrusionArrow
@@ -986,6 +1003,15 @@ class Workspace(QtCore.QObject):
         if not self.arrow_handle:
             self.arrow_handle = ExtrusionArrow(self, view, viewer)
         self.arrow_handle.set_axis(center, normal)
+        two_sides = self.fields['direction'].currentData() == 'two'
+        if two_sides:
+            if not self.arrow_handle2:
+                self.arrow_handle2 = ExtrusionArrow(self, view, viewer, second=True)
+            self.arrow_handle2.set_axis(center, normal * -1)
+        elif self.arrow_handle2:
+            self.arrow_handle2.hide()
+            self.arrow_handle2.deleteLater()
+            self.arrow_handle2 = None
 
     def edit_item(self, item):
         if self.session:
@@ -1344,6 +1370,8 @@ class Workspace(QtCore.QObject):
             self.update_references()
             if self.arrow_handle:
                 self.arrow_handle.reposition()
+            if self.arrow_handle2:
+                self.arrow_handle2.reposition()
             signature = (doc.Name if doc else None, edit.Name if edit else None,
                          bool(Gui.activeDocument() and Gui.activeDocument().getInEdit()),
                          bool(Gui.activeDocument() and hasattr(Gui.activeDocument().activeView(), 'getSceneGraph')))
@@ -1530,7 +1558,7 @@ class Workspace(QtCore.QObject):
         WORKSPACE = None
 
     def eventFilter(self, watched, event):
-        if self.arrow_handle and watched == self.arrow_handle and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease, QtCore.QEvent.MouseMove):
+        if watched in (self.arrow_handle, self.arrow_handle2) and watched is not None and event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease, QtCore.QEvent.MouseMove):
             return False
         if event.type() == QtCore.QEvent.MouseButtonRelease and hasattr(self, 'history') and watched == self.history.viewport():
             self.history_event_time = event.timestamp() or None

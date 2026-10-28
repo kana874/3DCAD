@@ -5,10 +5,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 
 class ExtrusionArrow(QtWidgets.QWidget):
-    def __init__(self, owner, view, viewer):
+    def __init__(self, owner, view, viewer, second=False):
         super().__init__(viewer)
         self.owner, self.view, self.viewer = owner, view, viewer
-        self.setObjectName('CAD_ExtrudeArrow')
+        self.second = second
+        self.setObjectName('CAD_ExtrudeArrow2' if second else 'CAD_ExtrudeArrow')
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setCursor(QtCore.Qt.SizeAllCursor)
         self.setToolTip('矢印をドラッグして押し出し距離を変更')
@@ -34,7 +35,11 @@ class ExtrusionArrow(QtWidgets.QWidget):
         if self.origin is None or self.owner.session is None:
             return
         try:
-            distance, _, reverse, symmetric, _ = self.owner.extrusion_values()
+            distance, _, reverse, symmetric, _, distance2 = self.owner.extrusion_values()
+            if self.second:
+                if distance2 is None:
+                    return
+                distance, reverse, symmetric = distance2, False, False
             sign = -1 if reverse else 1
             base = self.screen(self.origin)
             sample = self.screen(self.origin + self.normal * 10.0)
@@ -58,7 +63,7 @@ class ExtrusionArrow(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         dx, dy = self.axis
-        reverse = self.owner.fields['direction'].currentData() == 'reverse'
+        reverse = not self.second and self.owner.fields['direction'].currentData() == 'reverse'
         sign = -1 if reverse else 1
         dx, dy = dx * sign, dy * sign
         center = QtCore.QPointF(self.width()/2, self.height()/2)
@@ -75,13 +80,18 @@ class ExtrusionArrow(QtWidgets.QWidget):
         if event.button() != QtCore.Qt.LeftButton:
             return super().mousePressEvent(event)
         try:
-            distance, _, reverse, symmetric, _ = self.owner.extrusion_values()
+            distance, _, reverse, symmetric, _, distance2 = self.owner.extrusion_values()
+            if self.second:
+                if distance2 is None:
+                    return
+                distance, reverse, symmetric = distance2, False, False
         except Exception:
             return
         self.dragging = True
         self.drag_start = event.globalPosition()
         self.start_distance = distance * (-1 if reverse else 1)
         self.symmetric_drag = symmetric
+        self.two_sides = self.owner.fields['direction'].currentData() == 'two'
         event.accept()
 
     def mouseMoveEvent(self, event):
@@ -92,11 +102,11 @@ class ExtrusionArrow(QtWidgets.QWidget):
         if self.symmetric_drag:
             shift *= 2
         signed = self.start_distance + shift
-        if not self.symmetric_drag:
+        if not self.symmetric_drag and not self.two_sides:
             combo = self.owner.fields['direction']
             combo.setCurrentIndex(1 if signed < 0 else 0)
-        value = min(100000, max(0.001, abs(signed)))
-        self.owner.fields['distance'].setText('%.4f mm' % value)
+        value = min(100000, max(0.001, signed if self.two_sides else abs(signed)))
+        self.owner.fields['distance2' if self.second else 'distance'].setText('%.4f mm' % value)
         self.reposition()
         event.accept()
 
