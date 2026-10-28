@@ -29,8 +29,8 @@ def line_nodes(view):
         binding = next((n for n in children if str(n.getName()) == 'LineBind'), None)
         material = next((n for n in children if str(n.getName()) == 'LineMaterial'), None)
         if binding and material:
-            return binding, material
-    return None, None
+            return path.getTail()
+    return None
 
 
 class SeamVisibility:
@@ -48,9 +48,9 @@ class SeamVisibility:
         previous = self.applied.get(key)
         if previous and previous['hash'] == shape.hashCode():
             return previous['seams']
-        binding, material = line_nodes(obj.ViewObject)
+        line_set = line_nodes(obj.ViewObject)
         if previous:
-            if previous['binding'] == binding:
+            if previous['line_set'] == line_set:
                 self.restore(obj)
             else:
                 self.applied.pop(key, None)
@@ -59,24 +59,37 @@ class SeamVisibility:
             self.nonseams[key] = shape.hashCode()
             return []
         self.nonseams.pop(key, None)
-        if binding is None or material is None:
+        if line_set is None:
             return []
-        count = len(shape.Edges)
-        colors = [color.getValue() for color in material.diffuseColor.getValues()]
-        transparency = list(material.transparency.getValues())
-        self.applied[key] = {'binding': binding, 'material': material, 'hash': shape.hashCode(), 'seams': seams,
-                             'binding_value': binding.value.getValue(), 'colors': colors, 'transparency': transparency}
-        base_color = colors[-1] if colors else (0.0, 0.0, 0.0)
-        base_alpha = transparency[-1] if transparency else 0.0
-        per_color = [colors[i] if i < len(colors) else base_color for i in range(count)]
-        per_alpha = [1.0 if i in seams else (transparency[i] if i < len(transparency) else base_alpha) for i in range(count)]
-        material.diffuseColor.setNum(count)
-        for i, color in enumerate(per_color):
-            material.diffuseColor.set1Value(i, color)
-        material.transparency.setNum(count)
-        for i, alpha in enumerate(per_alpha):
-            material.transparency.set1Value(i, alpha)
-        binding.value = coin.SoMaterialBinding.PER_FACE
+        original = list(line_set.coordIndex.getValues())
+        # Keep every group and index slot so real edge selection indices do
+        # not shift. Collapse seam polyline vertices to one coordinate; only
+        # the transient Coin drawing changes, never the OCCT shape itself.
+        groups, current = [], []
+        for index in original:
+            if index < 0:
+                groups.append(current)
+                current = []
+            else:
+                current.append(index)
+        if current or len(groups) != len(shape.Edges):
+            return []  # Unknown representation: preserve all drawing/selection.
+        modified = list(original)
+        group = 0
+        first = None
+        for i, index in enumerate(original):
+            if index < 0:
+                group += 1
+                first = None
+            elif group in seams:
+                if first is None:
+                    first = index
+                modified[i] = first
+        self.applied[key] = {'line_set': line_set, 'hash': shape.hashCode(), 'seams': seams,
+                             'original': original, 'modified': modified}
+        for i, index in enumerate(modified):
+            if index != original[i]:
+                line_set.coordIndex.set1Value(i, index)
         return seams
 
     def restore(self, obj):
@@ -84,16 +97,10 @@ class SeamVisibility:
         old = self.applied.pop(key, None)
         if not old:
             return
-        material, binding = old['material'], old['binding']
-        material.diffuseColor.setNum(len(old['colors']))
-        if old['colors']:
-            for i, color in enumerate(old['colors']):
-                material.diffuseColor.set1Value(i, color)
-        material.transparency.setNum(len(old['transparency']))
-        if old['transparency']:
-            for i, alpha in enumerate(old['transparency']):
-                material.transparency.set1Value(i, alpha)
-        binding.value = old['binding_value']
+        field = old['line_set'].coordIndex
+        for i, index in enumerate(old['original']):
+            if index != old['modified'][i]:
+                field.set1Value(i, index)
 
     def sync(self, doc):
         import FreeCAD as App

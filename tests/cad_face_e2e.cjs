@@ -187,11 +187,29 @@ fs.mkdirSync(output, {recursive: true});
       const graph=await py("_graph_paths", "from pivy import coin\n_s=coin.SoSearchAction()\n_s.setType(coin.SoIndexedLineSet.getClassTypeId())\n_s.setInterest(coin.SoSearchAction.ALL)\n_s.apply(_cylinder.ViewObject.RootNode)\n_graph_paths=[]\nfor _path in _s.getPaths():\n _parent=_path.getNode(_path.getLength()-2)\n _graph_paths.append([str(_path.getTail().getTypeId().getName()),[(str(_parent.getChild(i).getTypeId().getName()),str(_parent.getChild(i).getName())) for i in range(_parent.getNumChildren())]])");
       console.log('SEAM_SCENEGRAPH',JSON.stringify(graph));
       await py('True', 'cad_workspace.WORKSPACE.set_hide_seams(True)\ncad_workspace.WORKSPACE.seam_visibility.apply(_cylinder)');
-      const alpha=await py("list(cad_workspace.WORKSPACE.seam_visibility.applied[(_cylinder.Document.Name,_cylinder.Name)]['material'].transparency.getValues())");
-      assert.deepEqual(alpha,[0,1,0],'only the seam line should be transparent');
+      const seamState=await py("(lambda v:[v['seams'],len(v['original']),len(v['modified']),sum(a!=b for a,b in zip(v['original'],v['modified']))])(cad_workspace.WORKSPACE.seam_visibility.applied[(_cylinder.Document.Name,_cylinder.Name)])");
+      assert.equal(seamState[0][0],1);
+      assert.equal(seamState[1],seamState[2],'all edge index slots must remain');
+      assert.ok(seamState[3]>0,'the seam polyline must collapse');
       assert.equal(await py('len(_cylinder.Shape.Edges)'),3,'render suppression must not change topology');
       await sleep(500);
       await page.screenshot({path:path.join(output,'seam-after.png')});
+      const seamPoint=await py("[_p.x(),_p.y()]", "from PySide6 import QtCore,QtWidgets\n_view=Gui.activeDocument().activeView()\n_mdi=Gui.getMainWindow().findChild(QtWidgets.QMdiArea)\n_viewer=next(w for w in _mdi.activeSubWindow().findChildren(QtWidgets.QWidget) if w.metaObject().className()=='Gui::View3DInventorViewer')\n_edge=_cylinder.Shape.Edges[1]\n_point=_edge.valueAt((_edge.FirstParameter+_edge.LastParameter)/2)\n_xy=_view.getPointOnScreen(_point)\n_w,_h=_view.getSize()\n_p=_viewer.mapToGlobal(QtCore.QPoint(round(_xy[0]*_viewer.width()/_w),round((_h-1-_xy[1])*_viewer.height()/_h)))");
+      const beforePNG=fs.readFileSync(path.join(output,'seam-before.png')).toString('base64');
+      const afterPNG=fs.readFileSync(path.join(output,'seam-after.png')).toString('base64');
+      const changedPixels=await page.evaluate(async ({beforePNG,afterPNG,seamPoint})=>{
+        const loadImage=src=>new Promise((resolve,reject)=>{const im=new Image();im.onload=()=>resolve(im);im.onerror=reject;im.src='data:image/png;base64,'+src;});
+        const [before,after]=await Promise.all([loadImage(beforePNG),loadImage(afterPNG)]);
+        const canvas=document.createElement('canvas');canvas.width=before.width;canvas.height=before.height;
+        const context=canvas.getContext('2d');context.drawImage(before,0,0);const a=context.getImageData(0,0,canvas.width,canvas.height).data;
+        context.drawImage(after,0,0);const b=context.getImageData(0,0,canvas.width,canvas.height).data;
+        let count=0;for(let y=Math.max(0,seamPoint[1]-12);y<Math.min(canvas.height,seamPoint[1]+13);y++)for(let x=Math.max(0,seamPoint[0]-8);x<Math.min(canvas.width,seamPoint[0]+9);x++){
+          const i=(y*canvas.width+x)*4;if(Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2])>50)count++;
+        }
+        return count;
+      },{beforePNG,afterPNG,seamPoint});
+      assert.ok(changedPixels>=5,'seam drawing must visibly disappear around its midpoint');
+      console.log('PASS seam display hidden while shape and edge slots remain intact');
       assert.deepEqual(await page.evaluate(()=>window.__fcPyErrors||[]),[]);
       console.log('PASS face extrusion -> recompute -> FCStd reopen');
     } catch (error) {
