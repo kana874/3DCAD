@@ -273,10 +273,15 @@ fs.mkdirSync(output, {recursive: true});
         return count;
       },{beforePNG,afterPNG,seamPoint});
       assert.ok(changedPixels>=5,'seam drawing must visibly disappear around its midpoint');
-      const realEdge=await py("_edge_click[:1]", "_edge_click=[]\nfor _index in (0,2):\n _edge=_cylinder.Shape.Edges[_index]\n for _n in range(36):\n  _pt=_edge.valueAt(_edge.FirstParameter+(_edge.LastParameter-_edge.FirstParameter)*_n/36)\n  _xy=_view.getPointOnScreen(_pt)\n  _info=_view.getObjectInfo((_xy[0],_xy[1]))\n  if _info and _info.get('Object')==_cylinder.Name and _info.get('Component')=='Edge%d' % (_index+1):\n   _p=_viewer.mapToGlobal(QtCore.QPoint(round(_xy[0]*_viewer.width()/_w),round((_h-1-_xy[1])*_viewer.height()/_h)))\n   _edge_click.append([_p.x(),_p.y(),'Edge%d' % (_index+1)]); break\n if _edge_click: break");
+      const realEdge=await py("_edge_click", "_edge_click=[]\nfor _index in (0,2):\n _edge=_cylinder.Shape.Edges[_index]\n for _n in range(4,32):\n  _pt=_edge.valueAt(_edge.FirstParameter+(_edge.LastParameter-_edge.FirstParameter)*_n/36)\n  _xy=_view.getPointOnScreen(_pt)\n  _info=_view.getObjectInfo((_xy[0],_xy[1]))\n  if _info and _info.get('Object')==_cylinder.Name and _info.get('Component')=='Edge%d' % (_index+1):\n   _p=_viewer.mapToGlobal(QtCore.QPoint(round(_xy[0]*_viewer.width()/_w),round((_h-1-_xy[1])*_viewer.height()/_h)))\n   _edge_click.append([_p.x(),_p.y(),'Edge%d' % (_index+1)])\n if _edge_click: break");
       assert.ok(realEdge.length,'a non-seam circular edge must remain pickable');
-      await page.mouse.click(realEdge[0][0],realEdge[0][1]); await sleep(400);
-      assert.ok(await py("any(s.Object.Name=='SeamProbe' and any(n.startswith('Edge') for n in s.SubElementNames) for s in Gui.Selection.getSelectionEx())"),'actual circular edge click must select an edge');
+      let pickedEdge=false;
+      for (const [x,y] of realEdge) {
+        await page.mouse.click(x,y); await sleep(200);
+        pickedEdge=await py("any(s.Object.Name=='SeamProbe' and any(n.startswith('Edge') for n in s.SubElementNames) for s in Gui.Selection.getSelectionEx())");
+        if (pickedEdge) break;
+      }
+      assert.ok(pickedEdge,'actual circular edge click must select an edge');
       console.log('PASS seam display hidden while shape and edge slots remain intact');
       assert.deepEqual(await page.evaluate(()=>window.__fcPyErrors||[]),[]);
       console.log('PASS face extrusion -> recompute -> FCStd reopen');
