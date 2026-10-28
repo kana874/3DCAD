@@ -23,7 +23,15 @@ RUN mkdir -p ja \
  && python -c "from pathlib import Path; p=Path('ja/NotoSansJP-VF.ttf'); assert p.stat().st_size>1000000 and p.read_bytes()[:4] in (b'\x00\x01\x00\x00',b'OTTO')" \
  && python scripts/build_static_jp_font.py ja/NotoSansJP-VF.ttf ja/NotoSansJP-Static.ttf
 
+FROM python:3.12-alpine AS engine-patch
+WORKDIR /stage
+COPY --from=base /usr/share/nginx/html/FreeCAD.wasm ./FreeCAD.wasm
+COPY scripts/patch_occt_wasm.py ./patch_occt_wasm.py
+RUN python patch_occt_wasm.py FreeCAD.wasm
+
 FROM base
+COPY --from=engine-patch /stage/FreeCAD.wasm /usr/share/nginx/html/FreeCAD.wasm
+COPY patches/occt/ /usr/share/nginx/html/occt-source/
 COPY --from=japanese /stage/play-gui/freecad-gui.html /usr/share/nginx/html/freecad-gui.html
 COPY --from=japanese /stage/play-gui/manifest.webmanifest /usr/share/nginx/html/manifest.webmanifest
 COPY play-gui/ja/fonts.json play-gui/ja/fonts-static.json play-gui/ja/freecad-ja.js /usr/share/nginx/html/ja/
