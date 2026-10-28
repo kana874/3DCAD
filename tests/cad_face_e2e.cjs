@@ -276,10 +276,10 @@ fs.mkdirSync(output, {recursive: true});
         let count=0;for(let y=Math.max(0,seamPoint[1]-12);y<Math.min(canvas.height,seamPoint[1]+13);y++)for(let x=Math.max(0,seamPoint[0]-8);x<Math.min(canvas.width,seamPoint[0]+9);x++){
           const i=(y*canvas.width+x)*4;if(Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2])>50)count++;
         }
-        return count;
+        let total=0,minX=canvas.width,minY=canvas.height,maxX=0,maxY=0;for(let y=40;y<canvas.height-100;y++)for(let x=250;x<canvas.width-320;x++){const i=(y*canvas.width+x)*4;if(Math.abs(a[i]-b[i])+Math.abs(a[i+1]-b[i+1])+Math.abs(a[i+2]-b[i+2])>50){total++;minX=Math.min(minX,x);maxX=Math.max(maxX,x);minY=Math.min(minY,y);maxY=Math.max(maxY,y);}} return {count,total,bounds:[minX,minY,maxX,maxY]};
       },{beforePNG,afterPNG,seamPoint});
       console.log('SEAM_PIXEL_DIAGNOSTIC', JSON.stringify({seamPoint,changedPixels,seamState}));
-      assert.ok(changedPixels>=5,'seam drawing must visibly disappear around its midpoint');
+      assert.ok(changedPixels.count>=5,'seam drawing must visibly disappear around its midpoint');
       const realEdge=await py("_edge_click", "_edge_click=[]\nfor _index in (0,2):\n _edge=_cylinder.Shape.Edges[_index]\n for _n in range(4,32):\n  _pt=_edge.valueAt(_edge.FirstParameter+(_edge.LastParameter-_edge.FirstParameter)*_n/36)\n  _xy=_view.getPointOnScreen(_pt)\n  _info=_view.getObjectInfo((_xy[0],_xy[1]))\n  if _info and _info.get('Object')==_cylinder.Name and _info.get('Component')=='Edge%d' % (_index+1):\n   _p=_viewer.mapToGlobal(QtCore.QPoint(round(_xy[0]*_viewer.width()/_w),round((_h-1-_xy[1])*_viewer.height()/_h)))\n   _edge_click.append([_p.x(),_p.y(),'Edge%d' % (_index+1)])\n if _edge_click: break");
       assert.ok(realEdge.length,'a non-seam circular edge must remain pickable');
       let pickedEdge=false;
