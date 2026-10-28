@@ -3,7 +3,7 @@
 import math
 import FreeCAD as App
 import Part
-from cad_core import CadError, body_of, valid_shape
+from cad_core import CadError, body_of, valid_shape, target_distance
 
 
 def selected_face(source, face_name, planar=True):
@@ -18,7 +18,7 @@ def selected_face(source, face_name, planar=True):
     return face
 
 
-def result_for_face(source, face_name, distance, operation, reversed=False, symmetric=False, through=False, distance2=None, start=0):
+def result_for_face(source, face_name, distance, operation, reversed=False, symmetric=False, through=False, distance2=None, start=0, target=None):
     if not math.isfinite(distance) or distance <= 0 or distance > 100000:
         raise CadError('正の押し出し距離を指定してください。')
     if distance2 is not None and (not math.isfinite(distance2) or distance2 <= 0 or distance2 > 100000):
@@ -27,7 +27,7 @@ def result_for_face(source, face_name, distance, operation, reversed=False, symm
         raise CadError('開始オフセットを確認してください。')
     face = selected_face(source, face_name, planar=operation != 'offset')
     if operation == 'offset':
-        if symmetric or through or distance2 is not None or start:
+        if symmetric or through or distance2 is not None or start or target:
             raise CadError('面オフセットは片側の距離で指定してください。')
         solids = source.Shape.Solids
         if len(solids) != 1 or not hasattr(solids[0], 'offsetFaces'):
@@ -36,12 +36,19 @@ def result_for_face(source, face_name, distance, operation, reversed=False, symm
         valid_shape(result)
         return result
     face = face.copy()
+    normal = face.normalAt(0, 0)
+    if target:
+        if symmetric or through or distance2 is not None:
+            raise CadError('終端面までは片側の押し出しで指定してください。')
+        if target[0].Document != source.Document:
+            raise CadError('同じ設計内の終端面を選択してください。')
+        direction = normal * (-1 if reversed else 1)
+        distance = target_distance(target, face.CenterOfMass + direction * start, direction)
     if through:
         if operation != 'cut' or symmetric or distance2 is not None:
             raise CadError('貫通は片側の切り取りで指定してください。')
         bounds = source.Shape.BoundBox
         distance = bounds.DiagonalLength + (face.CenterOfMass - bounds.Center).Length + abs(start) + 1
-    normal = face.normalAt(0, 0)
     face.translate(normal * (-start if reversed else start))
     vector = normal * (-distance if reversed else distance)
     if distance2 is not None:
@@ -74,6 +81,9 @@ class FaceExtrusion:
         obj.addProperty('App::PropertyLength', 'Length', '押し出し')
         obj.addProperty('App::PropertyLength', 'Length2', '押し出し')
         obj.addProperty('App::PropertyFloat', 'StartOffset', '押し出し')
+        obj.addProperty('App::PropertyLink', 'TargetFeature', '押し出し')
+        obj.addProperty('App::PropertyString', 'TargetFace', '押し出し')
+        obj.addProperty('App::PropertyBool', 'ToFace', '押し出し')
         obj.addProperty('App::PropertyEnumeration', 'Operation', '押し出し')
         obj.Operation = ['join', 'cut', 'intersect', 'new', 'offset']
         obj.addProperty('App::PropertyBool', 'Reversed', '押し出し')
@@ -88,7 +98,8 @@ class FaceExtrusion:
         try:
             obj.Shape = result_for_face(obj.SourceFeature, obj.SourceFace, float(obj.Length),
                                         str(obj.Operation), obj.Reversed, obj.Symmetric, obj.ThroughAll,
-                                        float(obj.Length2) if obj.TwoSides else None, obj.StartOffset)
+                                        float(obj.Length2) if obj.TwoSides else None, obj.StartOffset,
+                                        (obj.TargetFeature, obj.TargetFace) if obj.ToFace else None)
             obj.FaceStatus = 'OK'
         except Exception as error:
             obj.FaceStatus = '面の再選択または条件の修正が必要: ' + str(error)
@@ -110,6 +121,9 @@ class SketchIntersection:
         obj.addProperty('App::PropertyLength', 'Length', '交差')
         obj.addProperty('App::PropertyLength', 'Length2', '交差')
         obj.addProperty('App::PropertyFloat', 'StartOffset', '交差')
+        obj.addProperty('App::PropertyLink', 'TargetFeature', '交差')
+        obj.addProperty('App::PropertyString', 'TargetFace', '交差')
+        obj.addProperty('App::PropertyBool', 'ToFace', '交差')
         obj.addProperty('App::PropertyBool', 'Reversed', '交差')
         obj.addProperty('App::PropertyBool', 'Symmetric', '交差')
         obj.addProperty('App::PropertyBool', 'TwoSides', '交差')
@@ -139,6 +153,12 @@ class SketchIntersection:
             if not math.isfinite(obj.StartOffset) or abs(obj.StartOffset) > 100000:
                 raise CadError('開始オフセットを確認してください。')
             face.translate(normal * (-obj.StartOffset if obj.Reversed else obj.StartOffset))
+            if obj.ToFace:
+                if obj.Symmetric or obj.TwoSides:
+                    raise CadError('終端面までは片側の押し出しで指定してください。')
+                direction = normal * (-1 if obj.Reversed else 1)
+                distance = target_distance((obj.TargetFeature, obj.TargetFace),
+                                           obj.SourceSketch.Placement.Base + direction * obj.StartOffset, direction)
             vector = normal * (-distance if obj.Reversed else distance)
             if second is not None:
                 face.translate(normal * -second)
@@ -177,10 +197,10 @@ class FaceExtrusionSession:
         self.closed = False
         self.doc.openTransaction('面を押し出し')
 
-    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0):
+    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0, target=None):
         if self.closed or self.app.ActiveDocument != self.doc:
             raise CadError('押し出し操作の文書が変更されました。')
-        result = result_for_face(self.previous, self.face_name, distance, operation, reversed, symmetric, through, distance2, start)
+        result = result_for_face(self.previous, self.face_name, distance, operation, reversed, symmetric, through, distance2, start, target)
         if self.preview is None:
             self.preview = self.doc.addObject('Part::Feature', 'CADPreview')
             self.preview.Label = 'プレビュー（未確定）'
@@ -193,16 +213,16 @@ class FaceExtrusionSession:
         self.doc.recompute()
         return result
 
-    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0):
-        self.update(distance, operation, reversed, symmetric, through, distance2, start)
+    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0, target=None):
+        self.update(distance, operation, reversed, symmetric, through, distance2, start, target)
         try:
             self.doc.removeObject(self.preview.Name)
             self.preview = None
-            target = self.body
+            target_body = self.body
             if operation == 'new':
-                target = self.doc.addObject('PartDesign::Body', 'Body')
-                target.Label = '新規ボディ'
-            obj = target.newObject('PartDesign::FeaturePython', 'FaceExtrusion')
+                target_body = self.doc.addObject('PartDesign::Body', 'Body')
+                target_body.Label = '新規ボディ'
+            obj = target_body.newObject('PartDesign::FeaturePython', 'FaceExtrusion')
             obj.Label = '面オフセット' if operation == 'offset' else '面押し出し'
             FaceExtrusion(obj)
             obj.SourceFeature = self.previous
@@ -210,6 +230,9 @@ class FaceExtrusionSession:
             obj.Length = distance
             obj.Length2 = distance2 if distance2 is not None else 0
             obj.StartOffset = start
+            obj.ToFace = bool(target)
+            if target:
+                obj.TargetFeature, obj.TargetFace = target
             obj.Operation = operation
             obj.Reversed, obj.Symmetric, obj.ThroughAll = reversed, symmetric, through
             obj.TwoSides = distance2 is not None
@@ -220,7 +243,7 @@ class FaceExtrusionSession:
             if operation != 'new':
                 self.previous.ViewObject.Visibility = False
             obj.ViewObject.Visibility = True
-            target.Tip = obj
+            target_body.Tip = obj
             self.doc.commitTransaction()
             self.closed = True
             return obj

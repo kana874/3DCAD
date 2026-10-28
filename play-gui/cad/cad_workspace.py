@@ -77,6 +77,8 @@ class Workspace(QtCore.QObject):
         self.plane_picker = None
         self.arrow_handle = None
         self.arrow_handle2 = None
+        self.target_selection = None
+        self.selecting_target = False
         self.reference_scene = None
         self.reference_root = None
         self.grid_visible = True
@@ -742,6 +744,8 @@ class Workspace(QtCore.QObject):
         elif Gui.activeDocument().getInEdit():
             raise CadError('現在の編集を終了してください。')
         self.session = ExtrusionSession(App, Gui, sketch)
+        self.target_selection = None
+        self.selecting_target = False
         self.current_command = 'extrude'
         self.clear_panel('押し出し')
         label = QtWidgets.QLabel(sketch.Label + '：塗られた領域をクリックして選択')
@@ -763,7 +767,8 @@ class Workspace(QtCore.QObject):
         self.combo('direction', '方向', [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric'), ('両側', 'two')])
         self.field('distance2', '反対側の距離', '10 mm')
         self.configure_second_distance()
-        self.combo('extent', '範囲', [('距離', 'distance'), ('貫通（切り取り）', 'through')])
+        self.combo('extent', '範囲', [('距離', 'distance'), ('貫通（切り取り）', 'through'), ('終端面まで', 'to_face')])
+        self.build_target_selector()
         self.preview_button = self.button('プレビュー', self.update_preview, 'preview')
         self.accept_button = self.button('OK', self.accept_extrusion, 'accept')
         self.accept_button.setEnabled(False)
@@ -795,6 +800,8 @@ class Workspace(QtCore.QObject):
         if Gui.activeDocument().getInEdit():
             raise CadError('現在の編集を終了してください。')
         self.session = FaceExtrusionSession(App, Gui, face, mode)
+        self.target_selection = None
+        self.selecting_target = False
         self.current_command = 'extrude'
         self.clear_panel('面オフセット' if mode == 'offset' else '面を押し出し')
         self.form.addRow('面', QtWidgets.QLabel(face[0].Label + ' / ' + face[1]))
@@ -812,8 +819,10 @@ class Workspace(QtCore.QObject):
             self.fields['direction'].addItem('両側', 'two')
             self.field('distance2', '反対側の距離', '10 mm')
             self.configure_second_distance()
-        extents = [('距離', 'distance')] if mode == 'offset' else [('距離', 'distance'), ('貫通（切り取り）', 'through')]
+        extents = [('距離', 'distance')] if mode == 'offset' else [('距離', 'distance'), ('貫通（切り取り）', 'through'), ('終端面まで', 'to_face')]
         self.combo('extent', '範囲', extents)
+        if mode != 'offset':
+            self.build_target_selector()
         self.preview_button = self.button('プレビュー', self.update_preview, 'preview')
         self.accept_button = self.button('OK', self.accept_extrusion, 'accept')
         self.accept_button.setEnabled(False)
@@ -908,6 +917,59 @@ class Workspace(QtCore.QObject):
             self.region_picker.close()
             self.region_picker = None
 
+    def build_target_selector(self):
+        self.target_label = QtWidgets.QLabel('未選択')
+        self.target_label.setWordWrap(True)
+        self.form.addRow('終端面', self.target_label)
+        button = self.button('終端面を選択', self.begin_target_selection, 'select_target')
+        extent = self.fields['extent']
+        button.setEnabled(extent.currentData() == 'to_face')
+        extent.currentIndexChanged.connect(lambda *_: button.setEnabled(extent.currentData() == 'to_face'))
+
+    def begin_target_selection(self):
+        if not self.session:
+            return
+        self.selecting_target = True
+        self.close_region_picker()
+        self.close_extrusion_arrow()
+        if self.session.preview:
+            self.session.preview.ViewObject.Visibility = False
+        if self.session.previous:
+            self.session.previous.ViewObject.Visibility = True
+        Gui.Selection.clearSelection()
+        self.accept_button.setEnabled(False)
+        self.status('3Dビューで終端にする平行な面を選択してください。')
+
+    def finish_target_selection(self, target):
+        from cad_core import target_distance
+        from cad_face import selected_face
+        if getattr(target[0], 'TypeId', '') == 'PartDesign::Body':
+            if not target[0].Tip:
+                raise CadError('終端面を持つボディを選択してください。')
+            target = (target[0].Tip, target[1])
+        if target[0].Document != self.session.doc:
+            raise CadError('同じ設計内の終端面を選択してください。')
+        if hasattr(self.session, 'face_name'):
+            source = selected_face(self.session.previous, self.session.face_name)
+            origin, normal = source.CenterOfMass, source.normalAt(0, 0)
+        else:
+            sketch = self.session.sketch
+            origin = sketch.Placement.Base
+            normal = sketch.Placement.Rotation.multVec(App.Vector(0, 0, 1))
+        reverse = self.fields['direction'].currentData() == 'reverse'
+        direction = normal * (-1 if reverse else 1)
+        start = self.value('start', False) if 'start' in self.fields else 0
+        distance = target_distance(target, origin + direction * start, direction)
+        self.target_selection = target
+        self.selecting_target = False
+        self.target_label.setText(target[0].Label + ' / ' + target[1])
+        self.fields['distance'].setText('%.6f mm' % distance)
+        if hasattr(self.session, 'sketch') and self.session.region_candidates:
+            from cad_selection import RegionPicker
+            self.region_picker = RegionPicker(self.session.sketch, self.session.region_candidates, self.toggle_region)
+            self.region_picker.highlight(self.session.region_keys)
+        self.schedule_preview()
+
     def configure_second_distance(self):
         direction = self.fields['direction']
         second = self.fields['distance2']
@@ -916,10 +978,13 @@ class Workspace(QtCore.QObject):
 
     def extrusion_values(self):
         direction = self.fields['direction'].currentData()
+        target = self.target_selection if self.fields['extent'].currentData() == 'to_face' else None
+        if self.fields['extent'].currentData() == 'to_face' and not target:
+            raise CadError('終端の平面を選択してください。')
         return (self.value('distance'), self.fields['operation'].currentData(),
                 direction == 'reverse', direction == 'symmetric', self.fields['extent'].currentData() == 'through',
                 self.value('distance2') if direction == 'two' else None,
-                self.value('start', False) if 'start' in self.fields else 0)
+                self.value('start', False) if 'start' in self.fields else 0, target)
 
     def schedule_preview(self, *_):
         self.preview_ok = False
@@ -970,6 +1035,8 @@ class Workspace(QtCore.QObject):
         self.status('押し出しを作成しました。履歴のダブルクリックで距離を変更できます。')
 
     def cancel(self):
+        self.selecting_target = False
+        self.target_selection = None
         self.close_region_picker()
         self.close_plane_picker()
         self.close_extrusion_arrow()
@@ -1078,8 +1145,9 @@ class Workspace(QtCore.QObject):
         direction.setCurrentIndex(3 if obj.TwoSides else (2 if obj.Symmetric else (1 if obj.Reversed else 0)))
         self.field('distance2', '反対側の距離', str(obj.Length2) if float(obj.Length2) > 0 else '10 mm')
         self.configure_second_distance()
-        extent = self.combo('extent', '範囲', [('距離', 'distance'), ('貫通（切り取り）', 'through')])
-        extent.setCurrentIndex(1 if obj.ThroughAll else 0)
+        extent = self.combo('extent', '範囲', [('距離', 'distance'), ('貫通（切り取り）', 'through'), ('終端面まで', 'to_face')])
+        extent.setCurrentIndex(2 if obj.ToFace else (1 if obj.ThroughAll else 0))
+        target = self.edit_target_selector(obj, (obj.TargetFeature, obj.TargetFace) if obj.ToFace else None)
         def apply():
             with transaction(obj.Document, '面押し出しの距離を編集'):
                 obj.Length = self.value('length')
@@ -1090,6 +1158,11 @@ class Workspace(QtCore.QObject):
                 obj.TwoSides = direction.currentData() == 'two'
                 obj.Length2 = self.value('distance2') if obj.TwoSides else 0
                 obj.ThroughAll = extent.currentData() == 'through'
+                obj.ToFace = extent.currentData() == 'to_face'
+                if obj.ToFace:
+                    if not target[0]:
+                        raise CadError('終端の平面を選択してください。')
+                    obj.TargetFeature, obj.TargetFace = target[0]
                 obj.Document.recompute()
                 if obj.FaceStatus != 'OK':
                     raise CadError(obj.FaceStatus)
@@ -1108,6 +1181,9 @@ class Workspace(QtCore.QObject):
         direction.setCurrentIndex(3 if obj.TwoSides else (2 if obj.Symmetric else (1 if obj.Reversed else 0)))
         self.field('distance2', '反対側の距離', str(obj.Length2) if float(obj.Length2) > 0 else '10 mm')
         self.configure_second_distance()
+        extent = self.combo('extent', '範囲', [('距離', 'distance'), ('終端面まで', 'to_face')])
+        extent.setCurrentIndex(1 if obj.ToFace else 0)
+        target = self.edit_target_selector(obj, (obj.TargetFeature, obj.TargetFace) if obj.ToFace else None)
         def apply():
             with transaction(obj.Document, '交差の距離を編集'):
                 obj.Length = self.value('length')
@@ -1116,6 +1192,11 @@ class Workspace(QtCore.QObject):
                 obj.Symmetric = direction.currentData() == 'symmetric'
                 obj.TwoSides = direction.currentData() == 'two'
                 obj.Length2 = self.value('distance2') if obj.TwoSides else 0
+                obj.ToFace = extent.currentData() == 'to_face'
+                if obj.ToFace:
+                    if not target[0]:
+                        raise CadError('終端の平面を選択してください。')
+                    obj.TargetFeature, obj.TargetFace = target[0]
                 obj.Document.recompute()
                 if obj.IntersectionStatus != 'OK':
                     raise CadError(obj.IntersectionStatus)
@@ -1124,6 +1205,21 @@ class Workspace(QtCore.QObject):
             self.status('交差を更新しました。')
         self.button('適用', apply, 'apply_intersection_edit')
         self.button('キャンセル', self.home, 'cancel_intersection_edit')
+
+    def edit_target_selector(self, feature, initial):
+        selected = [initial]
+        label = QtWidgets.QLabel((initial[0].Label + ' / ' + initial[1]) if initial and initial[0] else '未選択')
+        self.form.addRow('終端面', label)
+        def choose():
+            face = self.face_selection()
+            if face and getattr(face[0], 'TypeId', '') == 'PartDesign::Body':
+                face = (face[0].Tip, face[1])
+            if not face or not face[0] or face[0].Document != feature.Document or face[0] == feature:
+                raise CadError('同じ設計内の別の終端面を選択してください。')
+            selected[0] = face
+            label.setText(face[0].Label + ' / ' + face[1])
+        self.button('選択中の面を終端に指定', choose, 'edit_target')
+        return selected
 
     def edit_region_panel(self, profile):
         from cad_profiles import ProfileEditSession
@@ -1155,15 +1251,50 @@ class Workspace(QtCore.QObject):
     def edit_feature_panel(self, obj):
         self.clear_panel(obj.Label + 'を編集')
         self.field('length', '距離', str(obj.Length))
+        if 'StartOffset' in obj.PropertiesList:
+            self.field('start', '開始オフセット', str(obj.StartOffset))
+        directions = [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric'), ('両側', 'two')]
+        direction = self.combo('direction', '方向', directions)
+        side = str(obj.SideType) if 'SideType' in obj.PropertiesList else ('Symmetric' if obj.Midplane else 'One side')
+        reverse = not obj.Reversed if obj.TypeId == 'PartDesign::Pocket' else obj.Reversed
+        direction.setCurrentIndex(3 if side == 'Two sides' else (2 if side == 'Symmetric' else (1 if reverse else 0)))
+        self.field('distance2', '反対側の距離', str(obj.Length2) if 'Length2' in obj.PropertiesList and float(obj.Length2) > 0 else '10 mm')
+        self.configure_second_distance()
+        options = [('距離', 'distance')]
         if obj.TypeId == 'PartDesign::Pocket':
-            extent = self.combo('extent', '範囲', [('距離', 'distance'), ('貫通', 'through')])
-            types = obj.getEnumerationsOfProperty('Type')
-            extent.setCurrentIndex(1 if str(obj.Type) == types[1] else 0)
+            options.append(('貫通', 'through'))
+        options.append(('終端面まで', 'to_face'))
+        extent = self.combo('extent', '範囲', options)
+        types = obj.getEnumerationsOfProperty('Type')
+        current_type = str(obj.Type)
+        mode = 'to_face' if len(types) > 3 and current_type == types[3] else ('through' if obj.TypeId == 'PartDesign::Pocket' and current_type == types[1] else 'distance')
+        extent.setCurrentIndex(next(i for i, (_, value) in enumerate(options) if value == mode))
+        link = obj.UpToFace if mode == 'to_face' else None
+        initial = (link[0], link[1][0]) if link and link[0] and link[1] else None
+        target = self.edit_target_selector(obj, initial)
         def apply():
             with transaction(obj.Document, '押し出し距離を編集'):
                 obj.Length = self.value('length')
-                if obj.TypeId == 'PartDesign::Pocket':
-                    obj.Type = 1 if self.fields['extent'].currentData() == 'through' else 0
+                selected_direction = direction.currentData()
+                if 'SideType' in obj.PropertiesList:
+                    obj.SideType = 'Two sides' if selected_direction == 'two' else ('Symmetric' if selected_direction == 'symmetric' else 'One side')
+                    if selected_direction == 'two':
+                        obj.Length2 = self.value('distance2')
+                else:
+                    if selected_direction == 'two':
+                        raise CadError('この環境では両側の押し出しを利用できません。')
+                    obj.Midplane = selected_direction == 'symmetric'
+                obj.Reversed = (selected_direction != 'reverse') if obj.TypeId == 'PartDesign::Pocket' else (selected_direction == 'reverse')
+                if 'StartType' in obj.PropertiesList:
+                    start = self.value('start', False)
+                    obj.StartType = 'Offset' if start else 'Profile plane'
+                    obj.StartOffset = start
+                selected_extent = extent.currentData()
+                obj.Type = 3 if selected_extent == 'to_face' else (1 if selected_extent == 'through' else 0)
+                if selected_extent == 'to_face':
+                    if not target[0]:
+                        raise CadError('終端の平面を選択してください。')
+                    obj.UpToFace = (target[0][0], [target[0][1]])
                 obj.Document.recompute()
                 valid_shape(obj.Shape)
                 for child in obj.InListRecursive:
@@ -1421,6 +1552,15 @@ class Workspace(QtCore.QObject):
         try:
             doc = App.ActiveDocument
             edit = sketch_in_edit(Gui)
+            if self.selecting_target and self.session:
+                target = self.face_selection()
+                if target:
+                    try:
+                        self.finish_target_selection(target)
+                    except Exception as error:
+                        Gui.Selection.clearSelection()
+                        self.status(str(error), True)
+                    return
             if self.plane_picker and (not Gui.activeDocument() or self.plane_picker.view != Gui.activeDocument().activeView()):
                 self.close_plane_picker()
                 self.current_command = None

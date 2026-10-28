@@ -55,6 +55,27 @@ def valid_shape(shape, single=True):
         raise CadError('結合されない形状です。新規ボディを選ぶか、輪郭を見直してください。')
 
 
+def target_distance(target, origin, direction):
+    """Distance to a parallel target plane, measured along the sweep axis."""
+    import Part
+    if not target or len(target) != 2 or not target[0] or not str(target[1]).startswith('Face'):
+        raise CadError('終端の平面を選択してください。')
+    try:
+        face = target[0].Shape.getElement(target[1])
+    except Exception as error:
+        raise CadError('終端面が見つかりません。選択し直してください。') from error
+    if face.ShapeType != 'Face' or not isinstance(face.Surface, Part.Plane):
+        raise CadError('終端には平行な平面を選択してください。')
+    normal = face.normalAt(0, 0)
+    dot = normal.dot(direction)
+    if abs(abs(dot) - 1.0) > 1e-6:
+        raise CadError('現在は押し出し面に平行な終端面に対応しています。')
+    distance = (face.CenterOfMass - origin).dot(normal) / dot
+    if not math.isfinite(distance) or distance <= 1e-6 or distance > 100000:
+        raise CadError('終端面が押し出し方向の先にありません。方向を確認してください。')
+    return distance
+
+
 @contextmanager
 def transaction(doc, label):
     doc.openTransaction(label)
@@ -202,7 +223,7 @@ class ExtrusionSession:
         if self.closed or self.app.ActiveDocument != self.doc:
             raise CadError('押し出し操作の文書が変更されました。操作をやり直してください。')
 
-    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0):
+    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0, target=None):
         import Part
         self._check()
         if not math.isfinite(distance) or distance <= 0 or distance > 100000:
@@ -211,6 +232,14 @@ class ExtrusionSession:
             raise CadError('反対側にも正の押し出し距離を指定してください。')
         if not math.isfinite(start) or abs(start) > 100000:
             raise CadError('開始オフセットを確認してください。')
+        if target:
+            if symmetric or through or distance2 is not None:
+                raise CadError('終端面までは片側の押し出しで指定してください。')
+            if target[0].Document != self.doc:
+                raise CadError('同じ設計内の終端面を選択してください。')
+            normal = self.sketch.Placement.Rotation.multVec(self.app.Vector(0, 0, 1))
+            direction = normal * (-1 if reversed else 1)
+            distance = target_distance(target, self.sketch.Placement.Base + direction * start, direction)
         if through:
             if operation != 'cut' or self.previous is None or symmetric or distance2 is not None:
                 raise CadError('貫通は既存ボディの片側切り取りで指定してください。')
@@ -266,8 +295,8 @@ class ExtrusionSession:
         self.doc.recompute()
         return result
 
-    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0):
-        self.update(distance, operation, reversed, symmetric, through, distance2, start)
+    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0, target=None):
+        self.update(distance, operation, reversed, symmetric, through, distance2, start, target)
         try:
             self.doc.removeObject(self.preview.Name)
             self.preview = None
@@ -293,6 +322,9 @@ class ExtrusionSession:
                 feature.Length = distance
                 feature.Length2 = distance2 if distance2 is not None else 0
                 feature.StartOffset = start
+                feature.ToFace = bool(target)
+                if target:
+                    feature.TargetFeature, feature.TargetFace = target
                 feature.Reversed, feature.Symmetric = reversed, symmetric
                 feature.TwoSides = distance2 is not None
                 self.doc.recompute()
@@ -318,6 +350,9 @@ class ExtrusionSession:
                 feature.StartOffset = start
             if through:
                 feature.Type = 1  # Native Pocket: Through all (parametric).
+            elif target:
+                feature.Type = 3  # Native Pad/Pocket: up to a referenced face.
+                feature.UpToFace = (target[0], [target[1]])
             # Pocket's default axis points into the support (-normal), whereas
             # the unified dialog and preview always use the sketch +normal.
             feature.Reversed = not reversed if operation == 'cut' else reversed

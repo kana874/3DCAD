@@ -35,7 +35,7 @@ class ExtrusionArrow(QtWidgets.QWidget):
         if self.origin is None or self.owner.session is None:
             return
         try:
-            distance, _, reverse, symmetric, _, distance2, _ = self.owner.extrusion_values()
+            distance, _, reverse, symmetric, _, distance2, _, _ = self.owner.extrusion_values()
             if self.second:
                 if distance2 is None:
                     return
@@ -80,7 +80,7 @@ class ExtrusionArrow(QtWidgets.QWidget):
         if event.button() != QtCore.Qt.LeftButton:
             return super().mousePressEvent(event)
         try:
-            distance, _, reverse, symmetric, _, distance2, _ = self.owner.extrusion_values()
+            distance, _, reverse, symmetric, _, distance2, _, _ = self.owner.extrusion_values()
             if self.second:
                 if distance2 is None:
                     return
@@ -102,6 +102,8 @@ class ExtrusionArrow(QtWidgets.QWidget):
         if self.symmetric_drag:
             shift *= 2
         signed = self.start_distance + shift
+        if self.owner.fields['extent'].currentData() == 'to_face':
+            self.owner.fields['extent'].setCurrentIndex(0)
         if not self.symmetric_drag and not self.two_sides:
             combo = self.owner.fields['direction']
             combo.setCurrentIndex(1 if signed < 0 else 0)
