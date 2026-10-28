@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Apply an idempotent Japanese-only frontend customization to freecad-web.
 
-The binary FreeCAD engine is NOT modified. Qt font setup is applied after the
-interpreter is ready by ja/freecad-ja.js. This is an integration candidate,
-not a claim of successful in-browser rendering.
+Qt font setup is applied after the interpreter is ready by ja/freecad-ja.js.
+The pinned engine receives a separate OCCT finite-parameter guard at build time.
 """
 from __future__ import annotations
 
@@ -38,6 +37,10 @@ def remove_fundraising(page: str) -> str:
 
 def localize(page: str) -> str:
     page = remove_fundraising(page)
+    # Give the patched engine its own cache key so browsers do not continue
+    # using the previous, unpatched binary after an upgrade.
+    page = re.sub(r"const WASM_URL = 'FreeCAD\.wasm(?:\?v=[A-Za-z0-9]+)?';",
+                  "const WASM_URL = 'FreeCAD.wasm?v=occtfinite1';", page)
     # Stage opened and downloaded CAD files in MEMFS and do not install the
     # upstream CAD autosave/recovery observer. Keep the normal home mount for
     # application preferences and installed workbench resources.

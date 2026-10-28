@@ -3197,7 +3197,7 @@ window.fcRunPy = fcRunPy;
    try {
      // These two literals are rewritten by infra/Dockerfile's md5 stamping (it greps to
      // confirm the rewrite landed, so a refactor that breaks the match fails the build).
-     const WASM_URL = 'FreeCAD.wasm';
+     const WASM_URL = 'FreeCAD.wasm?v=occtfinite1';
      const DATA_URL = 'FreeCAD.data.gz?v=1';
      let __wasmGot = 0, __dataGot = 0, __fromCache = true;
      const __report = () => {

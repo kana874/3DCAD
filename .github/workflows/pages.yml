@@ -23,6 +23,9 @@ on:
       - tests/cad_face_e2e.cjs
       - tests/test_workspace_boot.mjs
       - tests/test_file_bridge.mjs
+      - tests/occt_nan_probe.cjs
+      - scripts/patch_occt_wasm.py
+      - patches/occt/**
       - tests/serve_cad_fixture.py
       - tests/test_ja_runtime.py
       - tests/test_pages_sw.mjs
@@ -76,7 +79,7 @@ jobs:
           trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
           docker cp "$cid":/usr/share/nginx/html/. _site/
           cp pages/sw.js pages/coi-boot.js _site/
-          python3 scripts/build_pages.py _site --base /3DCAD/ --version 1.0.8-ja1
+          python3 scripts/build_pages.py _site --base /3DCAD/ --version 1.0.8-ja2
       - name: Assert Pages-ready static assets
         shell: bash
         run: |
@@ -133,6 +136,10 @@ jobs:
         env:
           CHROME_PATH: /usr/bin/google-chrome
         run: node tests/cad_face_e2e.cjs _site
+      - name: Verify OCCT invalid curve parameters and document rollback
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: node tests/occt_nan_probe.cjs _site
       - name: Exercise the native workspace in the real WASM engine
         timeout-minutes: 15
         env:

@@ -1042,9 +1042,25 @@ class Workspace(QtCore.QObject):
     def edit_face_feature_panel(self, obj):
         self.clear_panel(obj.Label + 'を編集')
         self.field('length', '距離', str(obj.Length))
+        operations = [('新規ボディ', 'new')] if str(obj.Operation) == 'new' else [('結合', 'join'), ('切り取り', 'cut'), ('交差', 'intersect'), ('面オフセット', 'offset')]
+        operation = self.combo('operation', '操作', operations)
+        operation.setCurrentIndex(next(i for i, (_, value) in enumerate(operations) if value == str(obj.Operation)))
+        directions = [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric'), ('両側', 'two')]
+        direction = self.combo('direction', '方向', directions)
+        direction.setCurrentIndex(3 if obj.TwoSides else (2 if obj.Symmetric else (1 if obj.Reversed else 0)))
+        self.field('distance2', '反対側の距離', str(obj.Length2) if float(obj.Length2) > 0 else '10 mm')
+        self.configure_second_distance()
+        extent = self.combo('extent', '範囲', [('距離', 'distance'), ('貫通（切り取り）', 'through')])
+        extent.setCurrentIndex(1 if obj.ThroughAll else 0)
         def apply():
             with transaction(obj.Document, '面押し出しの距離を編集'):
                 obj.Length = self.value('length')
+                obj.Operation = operation.currentData()
+                obj.Reversed = direction.currentData() == 'reverse'
+                obj.Symmetric = direction.currentData() == 'symmetric'
+                obj.TwoSides = direction.currentData() == 'two'
+                obj.Length2 = self.value('distance2') if obj.TwoSides else 0
+                obj.ThroughAll = extent.currentData() == 'through'
                 obj.Document.recompute()
                 if obj.FaceStatus != 'OK':
                     raise CadError(obj.FaceStatus)
