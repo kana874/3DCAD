@@ -35,7 +35,7 @@ class ExtrusionArrow(QtWidgets.QWidget):
         if self.origin is None or self.owner.session is None:
             return
         try:
-            distance, _, reverse, symmetric, _, distance2 = self.owner.extrusion_values()
+            distance, _, reverse, symmetric, _, distance2, _ = self.owner.extrusion_values()
             if self.second:
                 if distance2 is None:
                     return
@@ -80,7 +80,7 @@ class ExtrusionArrow(QtWidgets.QWidget):
         if event.button() != QtCore.Qt.LeftButton:
             return super().mousePressEvent(event)
         try:
-            distance, _, reverse, symmetric, _, distance2 = self.owner.extrusion_values()
+            distance, _, reverse, symmetric, _, distance2, _ = self.owner.extrusion_values()
             if self.second:
                 if distance2 is None:
                     return

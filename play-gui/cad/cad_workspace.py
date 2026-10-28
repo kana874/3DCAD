@@ -755,6 +755,7 @@ class Workspace(QtCore.QObject):
         self.boundary_toggle.setChecked(self.session.previous is not None)
         self.form.addRow(self.boundary_toggle)
         self.field('distance', '距離', '10 mm')
+        self.field('start', '開始オフセット', '0 mm')
         options = [('結合', 'join'), ('切り取り', 'cut'), ('交差', 'intersect'), ('新規ボディ', 'new')]
         if self.session.previous is None:
             options = [('新規ボディ内の最初の形状', 'new')]
@@ -798,6 +799,8 @@ class Workspace(QtCore.QObject):
         self.clear_panel('面オフセット' if mode == 'offset' else '面を押し出し')
         self.form.addRow('面', QtWidgets.QLabel(face[0].Label + ' / ' + face[1]))
         self.field('distance', '距離', '10 mm')
+        if mode != 'offset':
+            self.field('start', '開始オフセット', '0 mm')
         options = [('面オフセット', 'offset')] if mode == 'offset' else [('結合', 'join'), ('切り取り', 'cut'), ('交差', 'intersect'), ('新規ボディ', 'new')]
         self.combo('operation', '操作', options)
         directions = [('片側', 'one'), ('反転', 'reverse')]
@@ -915,7 +918,8 @@ class Workspace(QtCore.QObject):
         direction = self.fields['direction'].currentData()
         return (self.value('distance'), self.fields['operation'].currentData(),
                 direction == 'reverse', direction == 'symmetric', self.fields['extent'].currentData() == 'through',
-                self.value('distance2') if direction == 'two' else None)
+                self.value('distance2') if direction == 'two' else None,
+                self.value('start', False) if 'start' in self.fields else 0)
 
     def schedule_preview(self, *_):
         self.preview_ok = False
@@ -1010,6 +1014,9 @@ class Workspace(QtCore.QObject):
             local_center = sum((face.CenterOfMass for face in faces), App.Vector()) * (1.0 / len(faces))
             center = session.sketch.Placement.multVec(local_center)
             normal = session.sketch.Placement.Rotation.multVec(App.Vector(0, 0, 1))
+        if 'start' in self.fields:
+            start = self.value('start', False)
+            center = center + normal * (-start if self.fields['direction'].currentData() == 'reverse' else start)
         view = Gui.activeDocument().activeView()
         mdi = self.main.findChild(QtWidgets.QMdiArea)
         active = mdi.activeSubWindow() if mdi else None
@@ -1062,6 +1069,7 @@ class Workspace(QtCore.QObject):
     def edit_face_feature_panel(self, obj):
         self.clear_panel(obj.Label + 'を編集')
         self.field('length', '距離', str(obj.Length))
+        self.field('start', '開始オフセット', str(obj.StartOffset) + ' mm')
         operations = [('新規ボディ', 'new')] if str(obj.Operation) == 'new' else [('結合', 'join'), ('切り取り', 'cut'), ('交差', 'intersect'), ('面オフセット', 'offset')]
         operation = self.combo('operation', '操作', operations)
         operation.setCurrentIndex(next(i for i, (_, value) in enumerate(operations) if value == str(obj.Operation)))
@@ -1075,6 +1083,7 @@ class Workspace(QtCore.QObject):
         def apply():
             with transaction(obj.Document, '面押し出しの距離を編集'):
                 obj.Length = self.value('length')
+                obj.StartOffset = self.value('start', False)
                 obj.Operation = operation.currentData()
                 obj.Reversed = direction.currentData() == 'reverse'
                 obj.Symmetric = direction.currentData() == 'symmetric'
@@ -1093,6 +1102,7 @@ class Workspace(QtCore.QObject):
     def edit_intersection_panel(self, obj):
         self.clear_panel('交差を編集')
         self.field('length', '距離', str(obj.Length))
+        self.field('start', '開始オフセット', str(obj.StartOffset) + ' mm')
         directions = [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric'), ('両側', 'two')]
         direction = self.combo('direction', '方向', directions)
         direction.setCurrentIndex(3 if obj.TwoSides else (2 if obj.Symmetric else (1 if obj.Reversed else 0)))
@@ -1101,6 +1111,7 @@ class Workspace(QtCore.QObject):
         def apply():
             with transaction(obj.Document, '交差の距離を編集'):
                 obj.Length = self.value('length')
+                obj.StartOffset = self.value('start', False)
                 obj.Reversed = direction.currentData() == 'reverse'
                 obj.Symmetric = direction.currentData() == 'symmetric'
                 obj.TwoSides = direction.currentData() == 'two'

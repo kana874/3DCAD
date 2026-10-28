@@ -202,18 +202,20 @@ class ExtrusionSession:
         if self.closed or self.app.ActiveDocument != self.doc:
             raise CadError('押し出し操作の文書が変更されました。操作をやり直してください。')
 
-    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None):
+    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0):
         import Part
         self._check()
         if not math.isfinite(distance) or distance <= 0 or distance > 100000:
             raise CadError('正の押し出し距離を指定してください。')
         if distance2 is not None and (not math.isfinite(distance2) or distance2 <= 0 or distance2 > 100000):
             raise CadError('反対側にも正の押し出し距離を指定してください。')
+        if not math.isfinite(start) or abs(start) > 100000:
+            raise CadError('開始オフセットを確認してください。')
         if through:
             if operation != 'cut' or self.previous is None or symmetric or distance2 is not None:
                 raise CadError('貫通は既存ボディの片側切り取りで指定してください。')
             bounds = self.previous.Shape.BoundBox
-            distance = bounds.DiagonalLength + (self.sketch.Placement.Base - bounds.Center).Length + 1
+            distance = bounds.DiagonalLength + (self.sketch.Placement.Base - bounds.Center).Length + abs(start) + 1
         if self.region_candidates is not None:
             if not self.region_keys:
                 raise CadError('押し出す領域をクリック、または一覧から選択してください。')
@@ -226,6 +228,7 @@ class ExtrusionSession:
                 raise CadError('輪郭が閉じていません。スケッチの端点を確認してください。')
             face = Part.makeFace(wires, 'Part::FaceMakerBullseye')
         normal = self.sketch.Placement.Rotation.multVec(self.app.Vector(0, 0, 1))
+        face.translate(normal * (-start if reversed else start))
         direction = normal * (-distance if reversed else distance)
         if distance2 is not None:
             face.translate(normal * -distance2)
@@ -263,8 +266,8 @@ class ExtrusionSession:
         self.doc.recompute()
         return result
 
-    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None):
-        self.update(distance, operation, reversed, symmetric, through, distance2)
+    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0):
+        self.update(distance, operation, reversed, symmetric, through, distance2, start)
         try:
             self.doc.removeObject(self.preview.Name)
             self.preview = None
@@ -289,6 +292,7 @@ class ExtrusionSession:
                 feature.SourceBase = self.previous
                 feature.Length = distance
                 feature.Length2 = distance2 if distance2 is not None else 0
+                feature.StartOffset = start
                 feature.Reversed, feature.Symmetric = reversed, symmetric
                 feature.TwoSides = distance2 is not None
                 self.doc.recompute()
@@ -307,6 +311,11 @@ class ExtrusionSession:
             feature = target_body.newObject(kind, 'Pocket' if operation == 'cut' else 'Pad')
             feature.Profile = profile
             feature.Length = distance
+            if start:
+                if 'StartType' not in feature.PropertiesList:
+                    raise CadError('この環境では開始オフセットを利用できません。')
+                feature.StartType = 'Offset'
+                feature.StartOffset = start
             if through:
                 feature.Type = 1  # Native Pocket: Through all (parametric).
             # Pocket's default axis points into the support (-normal), whereas
