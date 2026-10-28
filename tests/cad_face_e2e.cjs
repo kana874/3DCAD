@@ -243,6 +243,10 @@ fs.mkdirSync(output, {recursive: true});
       const seam=await py("[(i+1,any(e.isSeam(f) for f in _cylinder.Shape.Faces)) for i,e in enumerate(_cylinder.Shape.Edges)]", "import Part\ncad_workspace.WORKSPACE.set_hide_seams(False)\n_cylinder=App.ActiveDocument.addObject('Part::Feature','SeamProbe')\n_cylinder.Shape=Part.makeCylinder(8,20)\n_cylinder.Placement.Base=App.Vector(70,0,0)\n_cylinder.ViewObject.DisplayMode='Flat Lines'\nApp.ActiveDocument.recompute()\nGui.activeDocument().activeView().viewAxonometric()\nGui.activeDocument().activeView().fitAll()");
       console.log('SEAM_TOPOLOGY',JSON.stringify(seam));
       assert.deepEqual(seam,[[1,false],[2,true],[3,false]]);
+      // Orient the periodic seam toward the camera; a seam on the back of the
+      // cylinder is correctly occluded and cannot produce a pixel difference.
+      const seamPoint=await py("_seam_screen", "from PySide6 import QtCore,QtWidgets\n_view=Gui.activeDocument().activeView()\n_mdi=Gui.getMainWindow().findChild(QtWidgets.QMdiArea)\n_viewer=next(w for w in _mdi.activeSubWindow().findChildren(QtWidgets.QWidget) if w.metaObject().className()=='Gui::View3DInventorViewer')\n_seam_screen=[]\nfor _angle in (0,90,180,270):\n _cylinder.Placement.Rotation=App.Rotation(App.Vector(0,0,1),_angle)\n App.ActiveDocument.recompute()\n cad_workspace.WORKSPACE.fit_view()\n _edge=_cylinder.Shape.Edges[1]\n _point=_edge.valueAt((_edge.FirstParameter+_edge.LastParameter)/2)\n _xy=_view.getPointOnScreen(_point)\n _info=_view.getObjectInfo((_xy[0],_xy[1]))\n if _info and _info.get('Object')==_cylinder.Name and _info.get('Component')=='Edge2':\n  _w,_h=_view.getSize()\n  _p=_viewer.mapToGlobal(QtCore.QPoint(round(_xy[0]*_viewer.width()/_w),round((_h-1-_xy[1])*_viewer.height()/_h)))\n  _seam_screen=[_p.x(),_p.y()]\n  break");
+      assert.equal(seamPoint.length,2,'test must orient the seam toward the viewer');
       await sleep(500);
       await page.screenshot({path:path.join(output,'seam-before.png')});
       const graph=await py("_graph_paths", "from pivy import coin\n_s=coin.SoSearchAction()\n_s.setType(coin.SoIndexedLineSet.getClassTypeId())\n_s.setInterest(coin.SoSearchAction.ALL)\n_s.apply(_cylinder.ViewObject.RootNode)\n_graph_paths=[]\nfor _path in _s.getPaths():\n _parent=_path.getNode(_path.getLength()-2)\n _graph_paths.append([str(_path.getTail().getTypeId().getName()),[(str(_parent.getChild(i).getTypeId().getName()),str(_parent.getChild(i).getName())) for i in range(_parent.getNumChildren())]])");
@@ -255,7 +259,6 @@ fs.mkdirSync(output, {recursive: true});
       assert.equal(await py('len(_cylinder.Shape.Edges)'),3,'render suppression must not change topology');
       await sleep(500);
       await page.screenshot({path:path.join(output,'seam-after.png')});
-      const seamPoint=await py("[_p.x(),_p.y()]", "from PySide6 import QtCore,QtWidgets\n_view=Gui.activeDocument().activeView()\n_mdi=Gui.getMainWindow().findChild(QtWidgets.QMdiArea)\n_viewer=next(w for w in _mdi.activeSubWindow().findChildren(QtWidgets.QWidget) if w.metaObject().className()=='Gui::View3DInventorViewer')\n_edge=_cylinder.Shape.Edges[1]\n_point=_edge.valueAt((_edge.FirstParameter+_edge.LastParameter)/2)\n_xy=_view.getPointOnScreen(_point)\n_w,_h=_view.getSize()\n_p=_viewer.mapToGlobal(QtCore.QPoint(round(_xy[0]*_viewer.width()/_w),round((_h-1-_xy[1])*_viewer.height()/_h)))");
       const beforePNG=fs.readFileSync(path.join(output,'seam-before.png')).toString('base64');
       const afterPNG=fs.readFileSync(path.join(output,'seam-after.png')).toString('base64');
       const changedPixels=await page.evaluate(async ({beforePNG,afterPNG,seamPoint})=>{
