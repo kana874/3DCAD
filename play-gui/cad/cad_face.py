@@ -97,6 +97,61 @@ class FaceExtrusion:
         pass
 
 
+class SketchIntersection:
+    """Intersection of a persistent sketch/profile sweep and the prior body."""
+    def __init__(self, obj):
+        obj.addProperty('App::PropertyLink', 'SourceBase', '交差')
+        obj.addProperty('App::PropertyLink', 'SourceProfile', '交差')
+        obj.addProperty('App::PropertyLink', 'SourceSketch', '交差')
+        obj.addProperty('App::PropertyLength', 'Length', '交差')
+        obj.addProperty('App::PropertyLength', 'Length2', '交差')
+        obj.addProperty('App::PropertyBool', 'Reversed', '交差')
+        obj.addProperty('App::PropertyBool', 'Symmetric', '交差')
+        obj.addProperty('App::PropertyBool', 'TwoSides', '交差')
+        obj.addProperty('App::PropertyString', 'IntersectionStatus', '交差')
+        obj.setEditorMode('IntersectionStatus', 1)
+        obj.Proxy = self
+
+    def execute(self, obj):
+        try:
+            if not obj.SourceBase or not obj.SourceProfile or not obj.SourceSketch:
+                raise CadError('交差の参照がありません。')
+            distance = float(obj.Length)
+            second = float(obj.Length2) if obj.TwoSides else None
+            if not math.isfinite(distance) or distance <= 0 or distance > 100000 or (second is not None and (not math.isfinite(second) or second <= 0 or second > 100000)):
+                raise CadError('正の押し出し距離を指定してください。')
+            profile = obj.SourceProfile.Shape
+            if profile.isNull():
+                raise CadError('交差する輪郭がありません。')
+            if profile.ShapeType == 'Face':
+                face = profile.copy()
+            else:
+                wires = profile.Wires
+                if not wires or any(not wire.isClosed() for wire in wires):
+                    raise CadError('交差する輪郭が閉じていません。')
+                face = Part.makeFace(wires, 'Part::FaceMakerBullseye')
+            normal = obj.SourceSketch.Placement.Rotation.multVec(App.Vector(0, 0, 1))
+            vector = normal * (-distance if obj.Reversed else distance)
+            if second is not None:
+                face.translate(normal * -second)
+                vector = normal * (distance + second)
+            elif obj.Symmetric:
+                face.translate(vector * -0.5)
+            result = obj.SourceBase.Shape.common(face.extrude(vector))
+            valid_shape(result)
+            obj.Shape = result
+            obj.IntersectionStatus = 'OK'
+        except Exception as error:
+            obj.IntersectionStatus = '交差の条件を確認してください: ' + str(error)
+            raise RuntimeError(obj.IntersectionStatus) from error
+
+    def dumps(self):
+        return None
+
+    def loads(self, state):
+        pass
+
+
 class FaceExtrusionSession:
     def __init__(self, app, gui, selection, mode='extrude'):
         source, name = selection

@@ -159,7 +159,7 @@ def make_profile(body, sketch, boundaries, keys):
 
 def restore_proxies():
     """Repair recovery files opened by upstream before our module was loaded."""
-    from cad_face import FaceExtrusion
+    from cad_face import FaceExtrusion, SketchIntersection
     repaired = 0
     for doc in App.listDocuments().values():
         for obj in doc.Objects:
@@ -171,6 +171,11 @@ def restore_proxies():
             elif obj.TypeId == 'PartDesign::FeaturePython' and all(name in obj.PropertiesList for name in ('SourceFeature', 'SourceFace', 'FaceStatus', 'ThroughAll')):
                 if not isinstance(obj.Proxy, FaceExtrusion):
                     obj.Proxy = FaceExtrusion.__new__(FaceExtrusion)
+                    obj.touch()
+                    repaired += 1
+            elif obj.TypeId == 'PartDesign::FeaturePython' and all(name in obj.PropertiesList for name in ('SourceBase', 'SourceProfile', 'SourceSketch', 'IntersectionStatus')):
+                if not isinstance(obj.Proxy, SketchIntersection):
+                    obj.Proxy = SketchIntersection.__new__(SketchIntersection)
                     obj.touch()
                     repaired += 1
         if repaired:

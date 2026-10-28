@@ -62,8 +62,8 @@ class SeamVisibility:
         if binding is None or material is None:
             return []
         count = len(shape.Edges)
-        colors = [material.diffuseColor.get1Value(i).getValue() for i in range(material.diffuseColor.getNum())]
-        transparency = [material.transparency.get1Value(i) for i in range(material.transparency.getNum())]
+        colors = [color.getValue() for color in material.diffuseColor.getValues()]
+        transparency = list(material.transparency.getValues())
         self.applied[key] = {'binding': binding, 'material': material, 'hash': shape.hashCode(), 'seams': seams,
                              'binding_value': binding.value.getValue(), 'colors': colors, 'transparency': transparency}
         base_color = colors[-1] if colors else (0.0, 0.0, 0.0)
@@ -71,9 +71,11 @@ class SeamVisibility:
         per_color = [colors[i] if i < len(colors) else base_color for i in range(count)]
         per_alpha = [1.0 if i in seams else (transparency[i] if i < len(transparency) else base_alpha) for i in range(count)]
         material.diffuseColor.setNum(count)
-        material.diffuseColor.setValues(0, count, per_color)
+        for i, color in enumerate(per_color):
+            material.diffuseColor.set1Value(i, color)
         material.transparency.setNum(count)
-        material.transparency.setValues(0, count, per_alpha)
+        for i, alpha in enumerate(per_alpha):
+            material.transparency.set1Value(i, alpha)
         binding.value = coin.SoMaterialBinding.PER_FACE
         return seams
 
@@ -85,10 +87,12 @@ class SeamVisibility:
         material, binding = old['material'], old['binding']
         material.diffuseColor.setNum(len(old['colors']))
         if old['colors']:
-            material.diffuseColor.setValues(0, len(old['colors']), old['colors'])
+            for i, color in enumerate(old['colors']):
+                material.diffuseColor.set1Value(i, color)
         material.transparency.setNum(len(old['transparency']))
         if old['transparency']:
-            material.transparency.setValues(0, len(old['transparency']), old['transparency'])
+            for i, alpha in enumerate(old['transparency']):
+                material.transparency.set1Value(i, alpha)
         binding.value = old['binding_value']
 
     def sync(self, doc):

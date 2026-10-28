@@ -241,6 +241,10 @@ class ExtrusionSession:
             result = self.previous.Shape.cut(tool)
             if abs(result.Volume - self.previous.Shape.Volume) < 1e-7:
                 raise CadError('切り取りがボディと交差していません。方向を反転してください。')
+        elif operation == 'intersect':
+            if self.previous is None:
+                raise CadError('交差には既存のソリッドが必要です。')
+            result = self.previous.Shape.common(tool)
         elif operation == 'new':
             result = tool
         else:
@@ -275,6 +279,31 @@ class ExtrusionSession:
                 from cad_profiles import make_profile
                 profile = make_profile(target_body, self.sketch, self.boundaries, self.region_keys)
                 target_body.Tip = None if separate_body else (self.previous or self.sketch)
+            if operation == 'intersect':
+                from cad_face import SketchIntersection
+                feature = target_body.newObject('PartDesign::FeaturePython', 'SketchIntersection')
+                feature.Label = '交差'
+                SketchIntersection(feature)
+                feature.SourceProfile = profile
+                feature.SourceSketch = self.sketch
+                feature.SourceBase = self.previous
+                feature.Length = distance
+                feature.Length2 = distance2 if distance2 is not None else 0
+                feature.Reversed, feature.Symmetric = reversed, symmetric
+                feature.TwoSides = distance2 is not None
+                self.doc.recompute()
+                if feature.IntersectionStatus != 'OK':
+                    raise CadError(feature.IntersectionStatus)
+                valid_shape(feature.Shape)
+                profile.ViewObject.Visibility = False
+                self.sketch.ViewObject.Visibility = False
+                self.previous.ViewObject.Visibility = False
+                feature.ViewObject.Visibility = True
+                target_body.Tip = feature
+                self.doc.commitTransaction()
+                self.closed = True
+                self._resume_saving()
+                return feature
             feature = target_body.newObject(kind, 'Pocket' if operation == 'cut' else 'Pad')
             feature.Profile = profile
             feature.Length = distance

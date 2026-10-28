@@ -755,7 +755,7 @@ class Workspace(QtCore.QObject):
         self.boundary_toggle.setChecked(self.session.previous is not None)
         self.form.addRow(self.boundary_toggle)
         self.field('distance', '距離', '10 mm')
-        options = [('結合', 'join'), ('切り取り', 'cut'), ('新規ボディ', 'new')]
+        options = [('結合', 'join'), ('切り取り', 'cut'), ('交差', 'intersect'), ('新規ボディ', 'new')]
         if self.session.previous is None:
             options = [('新規ボディ内の最初の形状', 'new')]
         self.combo('operation', '操作', options)
@@ -1049,6 +1049,8 @@ class Workspace(QtCore.QObject):
             self.sketch_home(obj)
         elif obj.TypeId == 'PartDesign::FeaturePython' and 'SourceFace' in obj.PropertiesList:
             self.edit_face_feature_panel(obj)
+        elif obj.TypeId == 'PartDesign::FeaturePython' and 'IntersectionStatus' in obj.PropertiesList:
+            self.edit_intersection_panel(obj)
         elif obj.TypeId in ('PartDesign::Pad', 'PartDesign::Pocket'):
             if Gui.activeDocument().getInEdit():
                 raise CadError('スケッチ編集を終了してください。')
@@ -1087,6 +1089,30 @@ class Workspace(QtCore.QObject):
             self.status('面押し出しを更新しました。')
         self.button('適用', apply, 'apply_face_edit')
         self.button('キャンセル', self.home, 'cancel_face_edit')
+
+    def edit_intersection_panel(self, obj):
+        self.clear_panel('交差を編集')
+        self.field('length', '距離', str(obj.Length))
+        directions = [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric'), ('両側', 'two')]
+        direction = self.combo('direction', '方向', directions)
+        direction.setCurrentIndex(3 if obj.TwoSides else (2 if obj.Symmetric else (1 if obj.Reversed else 0)))
+        self.field('distance2', '反対側の距離', str(obj.Length2) if float(obj.Length2) > 0 else '10 mm')
+        self.configure_second_distance()
+        def apply():
+            with transaction(obj.Document, '交差の距離を編集'):
+                obj.Length = self.value('length')
+                obj.Reversed = direction.currentData() == 'reverse'
+                obj.Symmetric = direction.currentData() == 'symmetric'
+                obj.TwoSides = direction.currentData() == 'two'
+                obj.Length2 = self.value('distance2') if obj.TwoSides else 0
+                obj.Document.recompute()
+                if obj.IntersectionStatus != 'OK':
+                    raise CadError(obj.IntersectionStatus)
+                valid_shape(obj.Shape)
+            self.home()
+            self.status('交差を更新しました。')
+        self.button('適用', apply, 'apply_intersection_edit')
+        self.button('キャンセル', self.home, 'cancel_intersection_edit')
 
     def edit_region_panel(self, profile):
         from cad_profiles import ProfileEditSession
@@ -1517,7 +1543,7 @@ class Workspace(QtCore.QObject):
             items[obj.Name] = item
             self.tree_items[obj.Name] = item
     def render_history(self, doc, objects):
-        features = [obj for obj in objects if (obj.TypeId == 'PartDesign::FeaturePython' and 'SourceFace' in obj.PropertiesList) or obj.TypeId == 'Sketcher::SketchObject' or
+        features = [obj for obj in objects if (obj.TypeId == 'PartDesign::FeaturePython' and ('SourceFace' in obj.PropertiesList or 'IntersectionStatus' in obj.PropertiesList)) or obj.TypeId == 'Sketcher::SketchObject' or
                     obj.TypeId.startswith('PartDesign::') and obj.TypeId not in
                     ('PartDesign::Body', 'PartDesign::FeaturePython')]
         signature = (doc.Name if doc else None, tuple((obj.Name, obj.Label) for obj in features))
