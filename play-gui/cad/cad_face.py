@@ -6,14 +6,14 @@ import Part
 from cad_core import CadError, body_of, valid_shape
 
 
-def selected_face(source, face_name):
+def selected_face(source, face_name, planar=True):
     if not source or not face_name.startswith('Face') or source.Shape.isNull():
         raise CadError('ボディの平面を一つ選択してください。')
     try:
         face = source.Shape.getElement(face_name)
     except Exception as error:
         raise CadError('面の参照が見つかりません。面を選択し直してください。') from error
-    if face.ShapeType != 'Face' or not isinstance(face.Surface, Part.Plane):
+    if face.ShapeType != 'Face' or (planar and not isinstance(face.Surface, Part.Plane)):
         raise CadError('押し出しには平面の面を選択してください。')
     return face
 
@@ -21,7 +21,17 @@ def selected_face(source, face_name):
 def result_for_face(source, face_name, distance, operation, reversed=False, symmetric=False, through=False):
     if not math.isfinite(distance) or distance <= 0 or distance > 100000:
         raise CadError('正の押し出し距離を指定してください。')
-    face = selected_face(source, face_name).copy()
+    face = selected_face(source, face_name, planar=operation != 'offset')
+    if operation == 'offset':
+        if symmetric or through:
+            raise CadError('面オフセットは片側の距離で指定してください。')
+        solids = source.Shape.Solids
+        if len(solids) != 1 or not hasattr(solids[0], 'offsetFaces'):
+            raise CadError('この形状では面オフセットを利用できません。')
+        result = solids[0].offsetFaces((face,), -distance if reversed else distance)
+        valid_shape(result)
+        return result
+    face = face.copy()
     if through:
         if operation != 'cut' or symmetric:
             raise CadError('貫通は片側の切り取りで指定してください。')
@@ -55,7 +65,7 @@ class FaceExtrusion:
         obj.addProperty('App::PropertyString', 'SourceFace', '押し出し')
         obj.addProperty('App::PropertyLength', 'Length', '押し出し')
         obj.addProperty('App::PropertyEnumeration', 'Operation', '押し出し')
-        obj.Operation = ['join', 'cut', 'intersect', 'new']
+        obj.Operation = ['join', 'cut', 'intersect', 'new', 'offset']
         obj.addProperty('App::PropertyBool', 'Reversed', '押し出し')
         obj.addProperty('App::PropertyBool', 'Symmetric', '押し出し')
         obj.addProperty('App::PropertyBool', 'ThroughAll', '押し出し')
@@ -80,16 +90,17 @@ class FaceExtrusion:
 
 
 class FaceExtrusionSession:
-    def __init__(self, app, gui, selection):
+    def __init__(self, app, gui, selection, mode='extrude'):
         source, name = selection
         body = body_of(source)
         if getattr(source, 'TypeId', '') == 'PartDesign::Body':
             body, source = source, source.Tip
         if not body or not source or body.Tip != source:
             raise CadError('現在のボディの面を選択してください。')
-        selected_face(source, name)
+        selected_face(source, name, planar=mode != 'offset')
         self.app, self.gui, self.doc = app, gui, source.Document
         self.body, self.previous, self.face_name = body, source, name
+        self.mode = mode
         self.visibility = {o.Name: o.ViewObject.Visibility for o in self.doc.Objects}
         self.preview = None
         self.closed = False
@@ -121,7 +132,7 @@ class FaceExtrusionSession:
                 target = self.doc.addObject('PartDesign::Body', 'Body')
                 target.Label = '新規ボディ'
             obj = target.newObject('PartDesign::FeaturePython', 'FaceExtrusion')
-            obj.Label = '面押し出し'
+            obj.Label = '面オフセット' if operation == 'offset' else '面押し出し'
             FaceExtrusion(obj)
             obj.SourceFeature = self.previous
             obj.SourceFace = self.face_name

@@ -130,6 +130,18 @@ fs.mkdirSync(output, {recursive: true});
       assert.ok(await py("App.ActiveDocument.getObject('FaceExtrusion').Shape.isValid()"));
       await py('True', "App.ActiveDocument.saveCopy('/tmp/face-probe.FCStd')\nApp.closeDocument('FaceProbe')\nApp.openDocument('/tmp/face-probe.FCStd')\nApp.ActiveDocument.recompute()");
       near(await py("App.ActiveDocument.getObject('FaceExtrusion').Shape.Volume"),36000);
+      await py('True', "App.newDocument('PressPullProbe')\n_ppbody=App.ActiveDocument.addObject('PartDesign::Body','Body')\n_ppbox=_ppbody.newObject('PartDesign::AdditiveBox','Box')\n_ppbox.Length=40\n_ppbox.Width=30\n_ppbox.Height=10\nApp.ActiveDocument.recompute()\nGui.activeDocument().activeView().viewAxonometric()\nGui.activeDocument().activeView().fitAll()");
+      await sleep(700);
+      const ppface=await py("next('Face%d' % (i+1) for i,f in enumerate(_ppbox.Shape.Faces) if f.normalAt(0,0).z>0.9)");
+      await py('True', "Gui.Selection.clearSelection()\nGui.Selection.addSelection(_ppbox,"+JSON.stringify(ppface)+")");
+      await click('CAD_Action_press_pull');
+      assert.equal(await py("cad_workspace.WORKSPACE.fields['operation'].currentData()"),'offset');
+      await fill('distance','5 mm');
+      await sleep(700);
+      await click('CAD_Button_accept');
+      assert.equal(await py("App.ActiveDocument.getObject('FaceExtrusion').FaceStatus"),'OK');
+      near(await py("App.ActiveDocument.getObject('FaceExtrusion').Shape.Volume"),18000);
+      console.log('PASS Q selects face offset and preserves native solid geometry');
       assert.deepEqual(await page.evaluate(()=>window.__fcPyErrors||[]),[]);
       console.log('PASS face extrusion -> recompute -> FCStd reopen');
     } catch (error) {

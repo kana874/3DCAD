@@ -177,6 +177,8 @@ class Workspace(QtCore.QObject):
             self.finish_sketch()
         elif name == 'extrude':
             self.extrude_panel()
+        elif name == 'press_pull':
+            self.press_pull()
         elif name in ('rectangle_exact', 'rectangle_center_exact', 'circle_exact'):
             self.geometry_panel(name)
         elif name in ('rectangle_three_points', 'circle_two_points'):
@@ -284,7 +286,7 @@ class Workspace(QtCore.QObject):
             [('sketch', 'スケッチを作成', None), ('finish', 'スケッチ終了', None)],
             [('line', '線 L', 'L'), ('rectangle', '長方形 R', 'R'), ('circle', '円 C', 'C'),
              ('dimension', '寸法 D', 'D'), ('trim', 'トリム T', 'T'), ('construction', '補助線 X', 'X')],
-            [('extrude', '押し出し E', 'E'), ('fillet', 'フィレット F', 'F'), ('chamfer', '面取り', None)],
+            [('extrude', '押し出し E', 'E'), ('press_pull', 'プレスプル Q', 'Q'), ('fillet', 'フィレット F', 'F'), ('chamfer', '面取り', None)],
             [('search', '検索 S', 'S'), ('grid', '原点・グリッド', None), ('fit', '全体表示', None)]
         ]
         for index, group in enumerate(groups):
@@ -298,7 +300,7 @@ class Workspace(QtCore.QObject):
             for name, title, key in group:
                 action = self.action(name, title, key)
                 bar.addAction(action)
-                if name in ('sketch', 'extrude', 'fillet', 'chamfer'):
+                if name in ('sketch', 'extrude', 'press_pull', 'fillet', 'chamfer'):
                     self.mode_widgets['solid'].append(action)
                 elif name in ('finish', 'line', 'rectangle', 'circle', 'dimension', 'trim', 'construction'):
                     self.mode_widgets['sketch'].append(action)
@@ -751,19 +753,38 @@ class Workspace(QtCore.QObject):
         self.boundary_toggle.toggled.connect(lambda *_: self.safe(self.load_regions))
         self.load_regions()
 
-    def face_extrusion_panel(self, face):
+    def press_pull(self):
+        if sketch_in_edit(Gui):
+            self.extrude_panel()
+            return
+        selected = Gui.Selection.getSelectionEx()
+        if len(selected) == 1 and len(selected[0].SubElementNames) == 1:
+            name = selected[0].SubElementNames[0]
+            if name.startswith('Face'):
+                self.face_extrusion_panel((selected[0].Object, name), mode='offset')
+                return
+            if name.startswith('Edge'):
+                self.dispatch('fillet')
+                return
+        self.extrude_panel()
+
+    def face_extrusion_panel(self, face, mode='extrude'):
         from cad_face import FaceExtrusionSession
         if Gui.activeDocument().getInEdit():
             raise CadError('現在の編集を終了してください。')
-        self.session = FaceExtrusionSession(App, Gui, face)
+        self.session = FaceExtrusionSession(App, Gui, face, mode)
         self.current_command = 'extrude'
-        self.clear_panel('面を押し出し')
+        self.clear_panel('面オフセット' if mode == 'offset' else '面を押し出し')
         self.form.addRow('面', QtWidgets.QLabel(face[0].Label + ' / ' + face[1]))
         self.field('distance', '距離', '10 mm')
-        self.combo('operation', '操作', [('結合', 'join'), ('切り取り', 'cut'),
-                                      ('交差', 'intersect'), ('新規ボディ', 'new')])
-        self.combo('direction', '方向', [('片側', 'one'), ('反転', 'reverse'), ('対称（全長）', 'symmetric')])
-        self.combo('extent', '範囲', [('距離', 'distance'), ('貫通（切り取り）', 'through')])
+        options = [('面オフセット', 'offset')] if mode == 'offset' else [('結合', 'join'), ('切り取り', 'cut'), ('交差', 'intersect'), ('新規ボディ', 'new')]
+        self.combo('operation', '操作', options)
+        directions = [('片側', 'one'), ('反転', 'reverse')]
+        if mode != 'offset':
+            directions.append(('対称（全長）', 'symmetric'))
+        self.combo('direction', '方向', directions)
+        extents = [('距離', 'distance')] if mode == 'offset' else [('距離', 'distance'), ('貫通（切り取り）', 'through')]
+        self.combo('extent', '範囲', extents)
         self.preview_button = self.button('プレビュー', self.update_preview, 'preview')
         self.accept_button = self.button('OK', self.accept_extrusion, 'accept')
         self.accept_button.setEnabled(False)
@@ -941,8 +962,10 @@ class Workspace(QtCore.QObject):
             return
         if hasattr(session, 'face_name'):
             from cad_face import selected_face
-            face = selected_face(session.previous, session.face_name)
-            center, normal = face.CenterOfMass, face.normalAt(0, 0)
+            face = selected_face(session.previous, session.face_name, planar=getattr(session, 'mode', '') != 'offset')
+            umin, umax, vmin, vmax = face.ParameterRange
+            u, v = (umin + umax) / 2, (vmin + vmax) / 2
+            center, normal = face.valueAt(u, v), face.normalAt(u, v)
         else:
             candidates = dict(session.region_candidates or [])
             faces = [candidates[key] for key in session.region_keys or [] if key in candidates]
@@ -1374,7 +1397,7 @@ class Workspace(QtCore.QObject):
             self.actions[name].setEnabled(bool(edit) and not locked)
         for name in ('save', 'save_as', 'export'):
             self.actions[name].setEnabled(bool(doc) and not locked)
-        for name in ('extrude', 'fillet', 'chamfer', 'fit', 'grid'):
+        for name in ('extrude', 'press_pull', 'fillet', 'chamfer', 'fit', 'grid'):
             self.actions[name].setEnabled(is_3d and not locked)
         self.actions['sketch'].setEnabled((not doc or is_3d) and not locked)
         self.actions['new_3d_view'].setEnabled(bool(doc) and not locked)
