@@ -140,6 +140,7 @@ fs.mkdirSync(output, {recursive: true});
       await click('CAD_Button_add_geometry');
       await press('e'); await sleep(800);
       assert.equal((await state()).session, 'extrude', 'E must route to the dedicated command');
+      assert.ok((await state()).widgets.CAD_ExtrudeArrow, 'sketch extrusion must show the on-view arrow');
       await click('CAD_Button_accept');
       assert.equal(await py('cad_workspace.WORKSPACE.mode_tabs.currentIndex()'),0,'finishing the sketch returns to the solid tab');
       assert.equal(await py("cad_workspace.WORKSPACE.actions['sketch'].isVisible() and not cad_workspace.WORKSPACE.actions['line'].isVisible()"),true,'only solid controls should be visible');

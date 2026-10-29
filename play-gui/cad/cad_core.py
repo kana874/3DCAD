@@ -55,6 +55,27 @@ def valid_shape(shape, single=True):
         raise CadError('結合されない形状です。新規ボディを選ぶか、輪郭を見直してください。')
 
 
+def target_distance(target, origin, direction):
+    """Distance to a parallel target plane, measured along the sweep axis."""
+    import Part
+    if not target or len(target) != 2 or not target[0] or not str(target[1]).startswith('Face'):
+        raise CadError('終端の平面を選択してください。')
+    try:
+        face = target[0].Shape.getElement(target[1])
+    except Exception as error:
+        raise CadError('終端面が見つかりません。選択し直してください。') from error
+    if face.ShapeType != 'Face' or not isinstance(face.Surface, Part.Plane):
+        raise CadError('終端には平行な平面を選択してください。')
+    normal = face.normalAt(0, 0)
+    dot = normal.dot(direction)
+    if abs(abs(dot) - 1.0) > 1e-6:
+        raise CadError('現在は押し出し面に平行な終端面に対応しています。')
+    distance = (face.CenterOfMass - origin).dot(normal) / dot
+    if not math.isfinite(distance) or distance <= 1e-6 or distance > 100000:
+        raise CadError('終端面が押し出し方向の先にありません。方向を確認してください。')
+    return distance
+
+
 @contextmanager
 def transaction(doc, label):
     doc.openTransaction(label)
@@ -202,16 +223,28 @@ class ExtrusionSession:
         if self.closed or self.app.ActiveDocument != self.doc:
             raise CadError('押し出し操作の文書が変更されました。操作をやり直してください。')
 
-    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False):
+    def update(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0, target=None):
         import Part
         self._check()
         if not math.isfinite(distance) or distance <= 0 or distance > 100000:
             raise CadError('正の押し出し距離を指定してください。')
+        if distance2 is not None and (not math.isfinite(distance2) or distance2 <= 0 or distance2 > 100000):
+            raise CadError('反対側にも正の押し出し距離を指定してください。')
+        if not math.isfinite(start) or abs(start) > 100000:
+            raise CadError('開始オフセットを確認してください。')
+        if target:
+            if symmetric or through or distance2 is not None:
+                raise CadError('終端面までは片側の押し出しで指定してください。')
+            if target[0].Document != self.doc:
+                raise CadError('同じ設計内の終端面を選択してください。')
+            normal = self.sketch.Placement.Rotation.multVec(self.app.Vector(0, 0, 1))
+            direction = normal * (-1 if reversed else 1)
+            distance = target_distance(target, self.sketch.Placement.Base + direction * start, direction)
         if through:
-            if operation != 'cut' or self.previous is None or symmetric:
+            if operation != 'cut' or self.previous is None or symmetric or distance2 is not None:
                 raise CadError('貫通は既存ボディの片側切り取りで指定してください。')
             bounds = self.previous.Shape.BoundBox
-            distance = bounds.DiagonalLength + (self.sketch.Placement.Base - bounds.Center).Length + 1
+            distance = bounds.DiagonalLength + (self.sketch.Placement.Base - bounds.Center).Length + abs(start) + 1
         if self.region_candidates is not None:
             if not self.region_keys:
                 raise CadError('押し出す領域をクリック、または一覧から選択してください。')
@@ -224,8 +257,12 @@ class ExtrusionSession:
                 raise CadError('輪郭が閉じていません。スケッチの端点を確認してください。')
             face = Part.makeFace(wires, 'Part::FaceMakerBullseye')
         normal = self.sketch.Placement.Rotation.multVec(self.app.Vector(0, 0, 1))
+        face.translate(normal * (-start if reversed else start))
         direction = normal * (-distance if reversed else distance)
-        if symmetric:
+        if distance2 is not None:
+            face.translate(normal * -distance2)
+            direction = normal * (distance + distance2)
+        elif symmetric:
             face.translate(direction * -0.5)
         tool = face.extrude(direction)
         if operation == 'join':
@@ -236,6 +273,10 @@ class ExtrusionSession:
             result = self.previous.Shape.cut(tool)
             if abs(result.Volume - self.previous.Shape.Volume) < 1e-7:
                 raise CadError('切り取りがボディと交差していません。方向を反転してください。')
+        elif operation == 'intersect':
+            if self.previous is None:
+                raise CadError('交差には既存のソリッドが必要です。')
+            result = self.previous.Shape.common(tool)
         elif operation == 'new':
             result = tool
         else:
@@ -254,8 +295,8 @@ class ExtrusionSession:
         self.doc.recompute()
         return result
 
-    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False):
-        self.update(distance, operation, reversed, symmetric, through)
+    def accept(self, distance, operation='join', reversed=False, symmetric=False, through=False, distance2=None, start=0, target=None):
+        self.update(distance, operation, reversed, symmetric, through, distance2, start, target)
         try:
             self.doc.removeObject(self.preview.Name)
             self.preview = None
@@ -270,17 +311,58 @@ class ExtrusionSession:
                 from cad_profiles import make_profile
                 profile = make_profile(target_body, self.sketch, self.boundaries, self.region_keys)
                 target_body.Tip = None if separate_body else (self.previous or self.sketch)
+            if operation == 'intersect':
+                from cad_face import SketchIntersection
+                feature = target_body.newObject('PartDesign::FeaturePython', 'SketchIntersection')
+                feature.Label = '交差'
+                SketchIntersection(feature)
+                feature.SourceProfile = profile
+                feature.SourceSketch = self.sketch
+                feature.SourceBase = self.previous
+                feature.Length = distance
+                feature.Length2 = distance2 if distance2 is not None else 0
+                feature.StartOffset = start
+                feature.ToFace = bool(target)
+                if target:
+                    feature.TargetFeature, feature.TargetFace = target
+                feature.Reversed, feature.Symmetric = reversed, symmetric
+                feature.TwoSides = distance2 is not None
+                self.doc.recompute()
+                if feature.IntersectionStatus != 'OK':
+                    raise CadError(feature.IntersectionStatus)
+                valid_shape(feature.Shape)
+                profile.ViewObject.Visibility = False
+                self.sketch.ViewObject.Visibility = False
+                self.previous.ViewObject.Visibility = False
+                feature.ViewObject.Visibility = True
+                target_body.Tip = feature
+                self.doc.commitTransaction()
+                self.closed = True
+                self._resume_saving()
+                return feature
             feature = target_body.newObject(kind, 'Pocket' if operation == 'cut' else 'Pad')
             feature.Profile = profile
             feature.Length = distance
+            if start:
+                if 'StartType' not in feature.PropertiesList:
+                    raise CadError('この環境では開始オフセットを利用できません。')
+                feature.StartType = 'Offset'
+                feature.StartOffset = start
             if through:
                 feature.Type = 1  # Native Pocket: Through all (parametric).
+            elif target:
+                feature.Type = 3  # Native Pad/Pocket: up to a referenced face.
+                feature.UpToFace = (target[0], [target[1]])
             # Pocket's default axis points into the support (-normal), whereas
             # the unified dialog and preview always use the sketch +normal.
             feature.Reversed = not reversed if operation == 'cut' else reversed
             if 'SideType' in feature.PropertiesList:
-                feature.SideType = 'Symmetric' if symmetric else 'One side'
+                feature.SideType = 'Two sides' if distance2 is not None else ('Symmetric' if symmetric else 'One side')
+                if distance2 is not None:
+                    feature.Length2 = distance2
             else:
+                if distance2 is not None:
+                    raise CadError('この環境では両側の押し出しを利用できません。')
                 feature.Midplane = symmetric
             self.doc.recompute()
             valid_shape(feature.Shape)
