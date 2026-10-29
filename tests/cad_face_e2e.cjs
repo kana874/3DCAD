@@ -258,7 +258,7 @@ fs.mkdirSync(output, {recursive: true});
           const pixels=ctx.getImageData(point[0]-5,point[1]-12,11,25).data;
           let dark=0;for(let i=0;i<pixels.length;i+=4) if(pixels[i]<60 && pixels[i+1]<60 && pixels[i+2]<60) dark++;
           return dark;
-        },{data:shot.toString('base64'),point:seamPoint});
+        },{data:Buffer.from(shot).toString('base64'),point:seamPoint});
         if(visible>=8){fs.writeFileSync(path.join(output,'seam-before.png'),shot);break;}
         seamPoint=[];
       }
