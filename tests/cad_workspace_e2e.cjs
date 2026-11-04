@@ -381,6 +381,14 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       await sleep(500);
       await click('CAD_Button_create_sketch'); await click('CAD_Button_start_sketch');
       assert.equal(await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Visibility'),true);
+      await runSearch('sketch_settings');
+      const autoBefore = await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Autoconstraints');
+      await click('CAD_SketchSetting_Autoconstraints');
+      assert.equal(await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Autoconstraints'), !autoBefore,
+        'automatic constraints setting must control the active sketch');
+      await click('CAD_SketchSetting_Autoconstraints');
+      assert.equal(await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Autoconstraints'), autoBefore);
+      await click('CAD_Button_settings_back');
       await py('True', 'Gui.activeDocument().activeView().getCameraNode().height.setValue(100)');
       await press('r'); await sleep(600);
       assert.equal(await py('cad_workspace.WORKSPACE.native_task_sketch'),true);
