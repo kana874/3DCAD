@@ -138,11 +138,15 @@ def create_sketch(app, gui, plane='XY', face_selection=None):
 
 
 def add_rectangle(app, sketch, width, height, x=0.0, y=0.0, center=False):
+    _finite_geometry(width, height, x, y)
+    if width <= 0 or height <= 0:
+        raise CadError('矩形の幅と高さは0より大きくしてください。')
     import Part
     import Sketcher
     v = app.Vector
     if center:
         x, y = x - width / 2, y - height / 2
+    _finite_geometry(x, y, x + width, y + height)
     corners = [v(x, y, 0), v(x + width, y, 0),
                v(x + width, y + height, 0), v(x, y + height, 0)]
     with transaction(sketch.Document, '寸法付き長方形'):
@@ -161,6 +165,9 @@ def add_rectangle(app, sketch, width, height, x=0.0, y=0.0, center=False):
 
 
 def add_circle(app, sketch, diameter, x=0.0, y=0.0):
+    _finite_geometry(diameter, x, y)
+    if diameter <= 0:
+        raise CadError('円の直径は0より大きくしてください。')
     import Part
     import Sketcher
     with transaction(sketch.Document, '直径指定の円'):
@@ -399,18 +406,28 @@ class ExtrusionSession:
             self._resume_saving()
 
 
+def _finite_geometry(*values):
+    if not all(math.isfinite(value) for value in values):
+        raise CadError('座標または寸法が無効です。入力し直してください。')
+
+
 def add_three_point_rectangle(app, sketch, x1, y1, x2, y2, x3, y3):
     """First two points define the base; the third defines signed height."""
-    import Part
-    import Sketcher
+    _finite_geometry(x1, y1, x2, y2, x3, y3)
     dx, dy = x2 - x1, y2 - y1
     width = math.hypot(dx, dy)
+    _finite_geometry(dx, dy, width)
     if width <= 1e-6:
         raise CadError('矩形の最初の2点を離してください。')
     ux, uy = dx / width, dy / width
     height = -(x3 - x2) * uy + (y3 - y2) * ux
+    _finite_geometry(height, -uy * height, ux * height,
+                     x2 - uy * height, y2 + ux * height,
+                     x1 - uy * height, y1 + ux * height)
     if abs(height) <= 1e-6:
         raise CadError('3点目を底辺から離してください。')
+    import Part
+    import Sketcher
     a = app.Vector(x1, y1, 0)
     b = app.Vector(x2, y2, 0)
     offset = app.Vector(-uy * height, ux * height, 0)
@@ -429,7 +446,9 @@ def add_three_point_rectangle(app, sketch, x1, y1, x2, y2, x3, y3):
 
 
 def add_two_point_circle(app, sketch, x1, y1, x2, y2):
+    _finite_geometry(x1, y1, x2, y2)
     diameter = math.hypot(x2 - x1, y2 - y1)
+    _finite_geometry(diameter, (x1 + x2) / 2, (y1 + y2) / 2)
     if diameter <= 1e-6:
         raise CadError('円の直径を定義する2点を離してください。')
     add_circle(app, sketch, diameter, (x1 + x2) / 2, (y1 + y2) / 2)

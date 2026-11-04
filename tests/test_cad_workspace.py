@@ -29,6 +29,24 @@ class Transactions:
 
 
 class WorkspacePolicyTest(unittest.TestCase):
+    def test_nonfinite_geometry_is_rejected_before_mutation(self):
+        doc = Transactions()
+        sketch = SimpleNamespace(Document=doc)
+        cases = [
+            (core.add_rectangle, (float('nan'), 5)),
+            (core.add_rectangle, (5, 5, float('inf'), 0)),
+            (core.add_circle, (float('inf'),)),
+            (core.add_three_point_rectangle, (0, 0, 1, 0, float('nan'), 1)),
+            (core.add_three_point_rectangle, (-1e308, 0, 1e308, 0, 0, 1)),
+            (core.add_two_point_circle, (0, 0, float('inf'), 1)),
+            (core.add_two_point_circle, (1e308, 0, 1e308, 1)),
+        ]
+        for function, args in cases:
+            with self.subTest(function=function.__name__, args=args):
+                with self.assertRaises(core.CadError):
+                    function(None, sketch, *args)
+                self.assertEqual(doc.calls, [])
+
     def test_commit_and_recompute_once(self):
         doc = Transactions()
         with core.transaction(doc, 'test'):
