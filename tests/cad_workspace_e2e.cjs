@@ -381,6 +381,14 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       await sleep(500);
       await click('CAD_Button_create_sketch'); await click('CAD_Button_start_sketch');
       assert.equal(await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Visibility'),true);
+      await runSearch('sketch_settings');
+      const autoBefore = await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Autoconstraints');
+      await click('CAD_SketchSetting_Autoconstraints');
+      assert.equal(await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Autoconstraints'), !autoBefore,
+        'automatic constraints setting must control the active sketch');
+      await click('CAD_SketchSetting_Autoconstraints');
+      assert.equal(await py('cad_workspace.sketch_in_edit(Gui).ViewObject.Autoconstraints'), autoBefore);
+      await click('CAD_Button_settings_back');
       await py('True', 'Gui.activeDocument().activeView().getCameraNode().height.setValue(100)');
       await press('r'); await sleep(600);
       assert.equal(await py('cad_workspace.WORKSPACE.native_task_sketch'),true);
@@ -421,6 +429,16 @@ _geometry_result['missingRegion']=_d.getObject('RegionProfile').Shape.isNull() a
       await sketchPoint([25,0,0]); await press('Escape'); await sleep(300);
       const dimensions = await py("[(c.Type,c.Value) for c in cad_workspace.sketch_in_edit(Gui).Constraints if c.Type in ('Radius','Diameter')]");
       assert.ok(dimensions.some(d=>Math.abs(d[1]-6)<0.001),'on-view entry must create a native circle dimension');
+      // Test the native auto-constraint path with actual pointer input; do not
+      // substitute geometry created directly through the Python API.
+      await py('True', "cad_workspace.sketch_in_edit(Gui).ViewObject.Autoconstraints=True\nApp.ParamGet('User parameter:BaseApp/Preferences/Mod/Sketcher/Tools').SetInt('OnViewParameterVisibility',0)");
+      const firstLine = await py('cad_workspace.sketch_in_edit(Gui).GeometryCount');
+      await runSearch('native_Sketcher_CreateLine');
+      await sketchPoint([0,0,0]); await sketchPoint([12,15,0]);
+      await press('Escape'); await sleep(300);
+      const originConstraint = await py("[(c.Type,c.First,c.FirstPos,c.Second,c.SecondPos) for c in cad_workspace.sketch_in_edit(Gui).Constraints if c.Type=='Coincident']");
+      assert.ok(originConstraint.some(c => (c[1]===firstLine && c[3]===-1) || (c[3]===firstLine && c[1]===-1)),
+        'starting a line at the origin must create a persistent coincidence constraint');
       await click('CAD_Action_finish');
       assert.equal(await py('not bool(Gui.Control.activeDialog()) and Gui.activeDocument().getInEdit() is None'),true);
       pass('embedded sketch controls -> interactive 3-corner construction -> on-view numeric circle dimension');

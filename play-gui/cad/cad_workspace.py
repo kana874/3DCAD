@@ -400,6 +400,17 @@ class Workspace(QtCore.QObject):
         ovp.setCurrentIndex(max(0, min(2, params.GetInt('OnViewParameterVisibility', 1))))
         ovp.currentIndexChanged.connect(lambda index: params.SetInt('OnViewParameterVisibility', index))
         self.form.addRow(QtWidgets.QLabel('次に開始する作図ツールから反映されます。Tabで入力項目を切り替えます。'))
+        for name, title in (('Autoconstraints', '自動拘束（候補を表示して作成）'),
+                            ('AvoidRedundant', '重複する自動拘束を避ける')):
+            if name in sketch.ViewObject.PropertiesList and isinstance(getattr(sketch.ViewObject, name), bool):
+                box = QtWidgets.QCheckBox(title)
+                box.setObjectName('CAD_SketchSetting_' + name)
+                box.setChecked(getattr(sketch.ViewObject, name))
+                box.toggled.connect(lambda value, prop=name: setattr(sketch.ViewObject, prop, value))
+                self.form.addRow(box)
+        help_text = QtWidgets.QLabel('自動拘束は作図中の候補から作成します。グリッドへの吸着は拘束ではありません。')
+        help_text.setWordWrap(True)
+        self.form.addRow(help_text)
         titles = {'ShowGrid': 'グリッド表示', 'GridSnap': 'グリッドにスナップ', 'GridAuto': 'グリッド間隔を自動調整', 'ShowConstraints': '拘束を表示', 'ShowAxes': '軸を表示', 'ShowPoints': '点を表示'}
         for name in sketch.ViewObject.PropertiesList:
             if (name.startswith('Show') or name in titles) and isinstance(getattr(sketch.ViewObject, name), bool):
